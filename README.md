@@ -1,3 +1,157 @@
+# 串联腿机器人十维控制：工作交接说明
+
+更新日期：2026-10-27。
+
+## 项目状态与检查范围
+
+本仓库与 [HHU-FutureFlow/LEG](https://github.com/HHU-FutureFlow/LEG) 控制的是同一台机器人。根据原开发者说明，六维方案已经验证平衡站立；本仓库是在六维代码基础上搭建的十维控制框架，尚不能视为已完成实机平衡验证的版本。
+
+本次检查对比的版本：
+
+- 六维基准：`LEG@a548c843fb4e063e10ef9bf0f1114575802d1405`。
+- 十维基准：`ten-dimensional-legg@f13b3a51a4be4fe72021f620cac051e64393051e`。
+- 检查方法：源代码对比，以及提取 LQR、运动学和 VMC 函数后的主机离线数值测试。未进行完整 STM32 工程构建、烧录或实机验证；离线测试程序未随本次文档提交纳入仓库。
+- 十维动力学推导、MATLAB 脚本及 A/B/K 矩阵尚未上传。按原开发者要求，本次不评价这些内容的正确性；代码中的 K 仍是占位内容。
+- **以下条目均为待处理或待确认事项，本次提交只更新文档，没有修复控制代码。** 代码链接固定到检查时版本，后续修复应记录对应提交与验证结果。
+
+优先级：P1 为接入十维平衡输出前应处理的问题；P2 为功能接入与调试阶段应处理的问题。“待确认”表示不能仅凭静态代码断言参数或实际硬件方向错误。
+
+## 控制接口约定
+
+按当前 `balance.h` 的定义，十维状态与四维输入应按以下顺序对齐：
+
+```text
+X = [s, ds, yaw, dyaw, l_theta, l_dtheta, r_theta, r_dtheta, phi, dphi]
+U = [l_Tw, r_Tw, l_Tp, r_Tp]
+U = -K * (X - X_target)
+```
+
+其中位移使用 m、速度使用 m/s、角度使用 rad、角速度使用 rad/s；Tw/Tp 为轮力矩与摆腿力矩。左右腿长在这个接口中由独立 PID 处理，再通过各侧 VMC 与 Tp 合成为关节力矩。腿长通道的 Tleg 应结合 VMC 理解为轴向力输入，不能仅因名称含 T 就当作关节力矩。
+
+后续上传模型时，必须逐列核对状态顺序、逐行核对输入顺序，并核对单位、正方向及反馈负号。机器人机构没有改变，每侧 VMC 的职责仍是把该侧轴向力和摆腿力矩映射到两个关节；LQR 扩展为十维本身不要求重写 VMC。
+
+## 待处理问题
+
+### 1. [P1 / 已确认] LQR 最后两项状态使用了腿长，遗漏独立的机体俯仰反馈
+
+位置：[LQR.c 22–31 行](https://github.com/HHU-FutureFlow/ten-dimensional-legg/blob/f13b3a51a4be4fe72021f620cac051e64393051e/application/chassis/LQR.c#L22-L31)。
+
+`balance.h` 为十维观测和目标定义了 phi/dphi，但 `LQR_calc()` 的 x[8]、x[9] 实际填入左右腿长误差。按当前头文件接口，这两项应为：
+
+```c
+x[8] = observe->phi  - balance_targets->phi_target;
+x[9] = observe->dphi - balance_targets->dphi_target;
+```
+
+离线单列注入测试中，仅令 K[0][8]=1、其余元素为零：phi 误差 0.1 不改变 l_Tw，而左腿长误差 0.01 使 l_Tw=-0.01，确认了输入错位。该测试只验证接口，不代表十维控制增益或稳定性已经验证。
+
+验收：使用各列独立扰动检查十个状态的顺序，并确认腿长变化不会被误当成 phi/dphi 输入。
+
+### 2. [P1 / 已确认] 关节仍处于固定位置调试模式，VMC 力矩未送出
+
+位置：[chassis.c 239–257 行](https://github.com/HHU-FutureFlow/ten-dimensional-legg/blob/f13b3a51a4be4fe72021f620cac051e64393051e/application/chassis/chassis.c#L239-L257)。
+
+虽然前面计算了 LQR 和 VMC，后面却将四个关节设为 `DM_CTRL_POSITION` 并发送固定角度；发送 Tf/Tb 的语句被注释。因此当前代码没有形成预期的关节平衡力矩闭环。
+
+处理：将标定/位置保持和平衡控制分为明确模式。平衡模式需要同时切换为 `DM_CTRL_TORQUE` 并发送 VMC 力矩，不能只取消力矩发送语句的注释，否则驱动会把力矩数值解释为位置。切换时应协调控制模式与参考值更新，避免旧参考被按新模式解释。
+
+验收：检查最终驱动发送值的模式和单位，确认四个关节实际使用对应侧 Tf/Tb，退出平衡时不残留旧输出。
+
+### 3. [P1 / 已确认] 右腿腿长 PID 的负号在迁移时丢失
+
+位置：[十维 chassis.c 205–209 行](https://github.com/HHU-FutureFlow/ten-dimensional-legg/blob/f13b3a51a4be4fe72021f620cac051e64393051e/application/chassis/chassis.c#L205-L209)；[六维右腿基准](https://github.com/HHU-FutureFlow/LEG/blob/a548c843fb4e063e10ef9bf0f1114575802d1405/chassis/application/chassis/chassis.c#L269-L271)。
+
+六维右腿使用 `-PIDCalculate(...)`，十维改成正号，而右腿 VMC 的计算公式未变。按当前运动学和 VMC 映射，这会在启用关节力矩输出后使右腿腿长调节方向错误。
+
+离线复现：右腿前后角度分别取代码中的 -0.722491 rad、-0.072904 rad，解算腿长约 0.330000 m；目标 0.40 m、Kp=90 时，当前 Tleg 约 +6.30，得到 Tf/Tb 约 (-0.8572,+0.8572)。用运动学有限差分检查，这组力矩对应缩腿方向。
+
+处理建议：按现有映射恢复右腿 PID 输出前的负号。**不要把左腿一起改成负号**：六维左腿原本使用正号，左右坐标和 VMC 分支应分别验证。
+
+验收：分别对左右腿施加正负腿长误差，检查最终原始电机坐标下的力矩能否减小误差；不可仅以左右代码表面一致作为依据。
+
+### 4. [P1 / 已确认] 轮电流发送前缺少六维版已有的最终限幅和异常值检查
+
+位置：[power_control.c 319–330 行](https://github.com/HHU-FutureFlow/ten-dimensional-legg/blob/f13b3a51a4be4fe72021f620cac051e64393051e/modules/motor/power_control.c#L319-L330)。
+
+十维版直接把 `power_control_out[i]` 转为 int16_t；六维版在最终发送前还有 `isfinite()` 检查与 ±15000 限幅。十维其他位置的限幅只在功率限制分支中执行，不能覆盖全部输出路径。当前轮电机配置未启用速度环，初始化中的 current_PID.MaxOut 也不能保证约束这条直接输出路径。
+
+接入非零 K 后，大误差可能造成过大的电流命令；超出整数可表示范围或出现 NaN/Inf 时，转换结果也不能作为有效控制命令使用。
+
+处理：在所有发送路径汇合处先处理非有限值，再限幅，最后进行整数转换和报文打包。±15000 是六维代码沿用的命令限值，实际测试限值仍需结合硬件确认。
+
+验收：分别注入正常值、超限正负值、NaN/Inf 和停机状态，确认最终发送值符合约束。
+
+### 5. [P2 / 已确认] 位置目标每周期清零，未继承六维参考初始化
+
+位置：[chassis.c 185–198 行](https://github.com/HHU-FutureFlow/ten-dimensional-legg/blob/f13b3a51a4be4fe72021f620cac051e64393051e/application/chassis/chassis.c#L185-L198)。
+
+`s_target` 每次任务都被写成 0，而 s 来自编码器累计角度，其零点不一定是进入平衡时的位置。接入位置反馈后可能出现回到编码器零点的动作，外部设置的运动参考也会被下一周期覆盖。
+
+处理：进入平衡时以有效观测建立 s_target；运动时按实际周期积分速度目标，保留必要的加速度限制及位置误差约束。六维代码已有相应参考处理，可作为迁移依据。yaw_target 也应按预期的保持航向/转向行为初始化和更新。
+
+验收：在不同编码器初始值下启动均保持当前位置；运动参考能跨周期保留，退出再进入平衡时正确重建参考。
+
+### 6. [P2 / 已确认] 新增 yaw 反馈未处理单圈角度跨界
+
+位置：[balance.c 70–71 行](https://github.com/HHU-FutureFlow/ten-dimensional-legg/blob/f13b3a51a4be4fe72021f620cac051e64393051e/application/chassis/balance.c#L70-L71)；[LQR.c 24 行](https://github.com/HHU-FutureFlow/ten-dimensional-legg/blob/f13b3a51a4be4fe72021f620cac051e64393051e/application/chassis/LQR.c#L24)。
+
+观测器读取单圈 Yaw，LQR 直接相减。离线测试中，179.9° 到 -179.9° 会使观测量跳变约 -6.2797 rad，而实际只是跨界转动 0.2°。启用偏航增益后会造成输入跳变。
+
+处理：保持航向时对角度误差归一化；连续旋转时使用已有的 YawTotalAngle，并让目标角度采用同样的连续表示。
+
+验收：覆盖 ±180° 跨界、非零目标及连续旋转场景，检查误差与输出连续性。
+
+### 7. [P2 / 参数变化已确认，合理性待确认] 腿长工作点与 PID 增益同时改变
+
+位置：[十维腿长 PID 配置](https://github.com/HHU-FutureFlow/ten-dimensional-legg/blob/f13b3a51a4be4fe72021f620cac051e64393051e/application/chassis/chassis.c#L137-L154)；[十维腿长目标](https://github.com/HHU-FutureFlow/ten-dimensional-legg/blob/f13b3a51a4be4fe72021f620cac051e64393051e/application/chassis/chassis.c#L197-L198)。
+
+| 参数 | 六维检查基准 | 十维检查基准 |
+| --- | --- | --- |
+| 左腿长度 PID Kp | 1200 | 90 |
+| 右腿长度 PID Kp | 1000 | 90 |
+| 左右腿长目标 | 0.36 m | 0.40 m |
+
+这些变化不是维度扩展必需的修改，会同时改变支撑刚度和工作点。不能仅凭代码认定 90 或 0.40 m 必然错误，但交接时需要确认修改目的与试验依据。
+
+建议先明确已验证的参数组合，避免把结构迁移问题与重新调参混在一起；后续还需核对十维模型与实际腿长工作点是否一致。
+
+### 8. [P2 / 已确认，六维也存在] 全局 x/u 被局部同名数组遮蔽
+
+位置：[LQR.c 14–20 行](https://github.com/HHU-FutureFlow/ten-dimensional-legg/blob/f13b3a51a4be4fe72021f620cac051e64393051e/application/chassis/LQR.c#L14-L20)。
+
+函数内重新声明 x/u，计算更新的是局部数组。离线测试确认 l_Tw 已发生变化时，全局 x/u 仍为零。调试器监视全局数组会误判控制器没有工作。
+
+处理：仅保留实际需要的一套数组，或单独保存调试快照并使用明确名称。
+
+验收：监视值与本周期用于矩阵乘法的状态、控制输出一致。
+
+### 9. [P1 / 已确认，六维遗留] 命令层急停没有接入当前底盘执行路径
+
+位置：[robot_cmd.c 的 EmergencyHandler](https://github.com/HHU-FutureFlow/ten-dimensional-legg/blob/f13b3a51a4be4fe72021f620cac051e64393051e/application/cmd/robot_cmd.c#L342-L353)；[chassis.c](https://github.com/HHU-FutureFlow/ten-dimensional-legg/blob/f13b3a51a4be4fe72021f620cac051e64393051e/application/chassis/chassis.c)。
+
+EmergencyHandler 设置 CHASSIS_ZERO_FORCE，但当前 ChassisTask 没有订阅/读取该底盘命令，也没有据此停止腿轮输出。命令层进入急停状态不等于底盘执行器已经停止。
+
+处理：把急停状态接入底盘模式管理与最终输出路径，覆盖四个关节和两个轮电机。需要区分“零前馈力矩”和“真正停止”：位置保持模式下仅将前馈力矩清零，仍可能通过位置刚度输出力矩。
+
+验收：分别检查位置调试模式、平衡模式下的急停及恢复行为，确认腿轮均响应，恢复时重新建立参考而非直接沿用旧输出。
+
+## 建议接手顺序与交接验收
+
+- [ ] 记录当前实机配置、左右零位/正方向及已验证的六维固件版本；本次比较的六维提交不自动等同于实际烧录版本。
+- [ ] 修复十维状态向量错位，核对四个控制输出的含义和顺序。
+- [ ] 恢复并验证右腿长度控制符号，分别验证左右 VMC 和电机方向。
+- [ ] 恢复轮电流最终检查与限幅，接通底盘急停执行链路。
+- [ ] 明确标定、位置保持、平衡模式及切换条件，接通平衡模式下的关节力矩输出。
+- [ ] 完成位置/航向参考管理、yaw 跨界处理及调试变量修正，确认腿长与 PID 参数变更依据。
+- [ ] 待原开发者上传十维模型后，核对 A/B/K 的状态和输入顺序、单位、方向、工作点及实际控制周期，开展闭环仿真；本说明不提供可直接使用的十维增益。
+- [ ] 完成完整 STM32 构建与分阶段实机验证，记录每项问题的修复提交、测试条件、日志及结果，再更新本 README 的状态。
+
+---
+
+## 原始框架说明
+
+以下保留原始 basic_framework 文档，供环境配置和框架结构参考。原始文档中的功能展示不代表本十维控制实现已经完成相同验证。
+
 # YueLu2022/2023 EC basic_framework-dev
 
 湖南大学RoboMaster跃鹿战队2022-2023电控通用嵌入式框架。
