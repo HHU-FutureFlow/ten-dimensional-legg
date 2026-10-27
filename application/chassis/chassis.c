@@ -49,12 +49,34 @@ ten_balance_target ten_targets ;
 
 /* Set raw joint angles measured at the mirrored right calibration pose.
  * Raw reference on right: front = rear = 0.357252 rad.
- * RAM only; set l_zero_ready=1 after filling both offsets.
+ * RAM only; fill both offsets in the debugger.
  */
 volatile float l_front_zero = 0.0f, l_behind_zero = 0.0f;
-volatile float l_front_raw_position, l_behind_raw_position;
 
 volatile float l_wheel_direction = -1.0f;
+
+volatile Chassis_Dbg_s chassis_dbg; // 仅占RAM,供调试器观测
+
+/* 刷新电机反馈调试量,符号与ChassisTask中的控制量保持一致 */
+static void ChassisDbgUpdate()
+{
+    const float d2r = 0.01745329252f;
+
+    chassis_dbg.leg_pos[0] = r_front_8009_motor->measure.position;
+    chassis_dbg.leg_pos[1] = r_behind_8009_motor->measure.position;
+    chassis_dbg.leg_pos[2] = -l_front_8009_motor->measure.position;
+    chassis_dbg.leg_pos[3] = -l_behind_8009_motor->measure.position;
+
+    chassis_dbg.leg_vel[0] = r_front_8009_motor->measure.velocity;
+    chassis_dbg.leg_vel[1] = r_behind_8009_motor->measure.velocity;
+    chassis_dbg.leg_vel[2] = -l_front_8009_motor->measure.velocity;
+    chassis_dbg.leg_vel[3] = -l_behind_8009_motor->measure.velocity;
+
+    chassis_dbg.wheel_pos[0] = -l_wheel_motor->measure.total_angle * d2r;
+    chassis_dbg.wheel_pos[1] = r_wheel_motor->measure.total_angle * d2r;
+    chassis_dbg.wheel_vel[0] = -l_wheel_motor->measure.speed_aps * d2r;
+    chassis_dbg.wheel_vel[1] = r_wheel_motor->measure.speed_aps * d2r;
+}
 
 void ChassisInit()
 {
@@ -164,6 +186,7 @@ void ChassisInit()
 
 void ChassisTask()
 {
+    ChassisDbgUpdate();
     DMMotorSetMode(DM_CMD_MOTOR_MODE, l_front_8009_motor);
     DMMotorSetMode(DM_CMD_MOTOR_MODE, l_behind_8009_motor);
     SetPowerLimit(1000000.0f);
@@ -217,16 +240,13 @@ void ChassisTask()
     // DMMotorSetRef(r_behind_8009_motor,0.01f);
     // DJIMotorSetRef(r_wheel_motor,3318.833*r_control_datas.r_Tw);
 
-    
+    // DMMotorStop(r_front_8009_motor);
+    // DMMotorStop(r_behind_8009_motor);
+    // DMMotorStop(l_front_8009_motor);
+    // DMMotorStop(l_behind_8009_motor);
+    // DJIMotorStop(l_wheel_motor);
+    // DJIMotorStop(r_wheel_motor); 
 
-
-
-
-    
-   
-    
-    
-    
     /* Mirror torque as well as position; driver direction remains NORMAL. */
     // DMMotorSetRef(l_front_8009_motor,
     //     isfinite(l_leg_motor_torques.l_Tf) ? -l_leg_motor_torques.l_Tf : 0.0f);
@@ -242,10 +262,10 @@ void ChassisTask()
     DMMotorSetCtrlMode(l_behind_8009_motor, DM_CTRL_POSITION);
 
 
-    DMMotorSetRef(r_front_8009_motor,  -0.722491f);
-    DMMotorSetRef(r_behind_8009_motor, -0.072904f);
-    DMMotorSetRef(l_front_8009_motor,   -2.603873f);
-    DMMotorSetRef(l_behind_8009_motor,  2.278726f);
+    DMMotorSetRef(r_front_8009_motor,  -0.03529f);
+    DMMotorSetRef(r_behind_8009_motor, -0.13294f);
+    DMMotorSetRef(l_front_8009_motor,   -2.77733f);
+    DMMotorSetRef(l_behind_8009_motor,  2.31765);
 
     // DMMotorSetRef(r_front_8009_motor,r_leg_motor_torques.r_Tf );
 
