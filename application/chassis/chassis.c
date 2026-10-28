@@ -78,6 +78,16 @@ static void ChassisDbgUpdate()
     chassis_dbg.wheel_vel[1] = r_wheel_motor->measure.speed_aps * d2r;
 }
 
+/* 把喂进 LQR 的状态拷一份出来,方便在 Ozone 里和 T_lw 对着看 */
+static void ChassisDbgLqr(const ten_balance_observation *o)
+{
+    chassis_dbg.lqr_x[0] = o->s;        chassis_dbg.lqr_x[1] = o->ds;
+    chassis_dbg.lqr_x[2] = o->yaw;      chassis_dbg.lqr_x[3] = o->dyaw;
+    chassis_dbg.lqr_x[4] = o->l_theta;  chassis_dbg.lqr_x[5] = o->l_dtheta;
+    chassis_dbg.lqr_x[6] = o->r_theta;  chassis_dbg.lqr_x[7] = o->r_dtheta;
+    chassis_dbg.lqr_x[8] = o->phi;      chassis_dbg.lqr_x[9] = o->dphi;
+}
+
 void ChassisInit()
 {
     chassis_IMU_data = INS_Init();
@@ -187,9 +197,9 @@ void ChassisInit()
 void ChassisTask()
 {
     ChassisDbgUpdate();
-    DMMotorSetMode(DM_CMD_MOTOR_MODE, l_front_8009_motor);
-    DMMotorSetMode(DM_CMD_MOTOR_MODE, l_behind_8009_motor);
-    SetPowerLimit(1000000.0f);
+    /* 使能帧只在 DMMotorInit/DMMotorEnable 里发一次。原来在这里每 5ms 发两帧
+     * DM_CMD_MOTOR_MODE，既占 CAN 带宽又打断 MIT 帧时序，已移除。 */
+    SetPowerLimit(1000000.0f);   /* @Todo 接裁判系统后换成真实底盘功率 */
     float r_theta_f=r_front_8009_motor->measure.position;
     float r_theta_b=r_behind_8009_motor->measure.position;
     float r_speed_f=r_front_8009_motor->measure.velocity;
@@ -225,7 +235,12 @@ void ChassisTask()
     r_wheel_control(r_wheel_angle,r_wheel_w,&r_wheel);
     l_wheel_control(l_wheel_angle,l_wheel_w,&l_wheel);
     BalanceObserve(&ten_balance_observe);
+    ChassisDbgLqr(&ten_balance_observe);
     LQR_calc(&ten_balance_observe,&ten_targets,&four_control_datas);
+    chassis_dbg.lqr_u[0] = four_control_datas.l_Tw;
+    chassis_dbg.lqr_u[1] = four_control_datas.r_Tw;
+    chassis_dbg.lqr_u[2] = four_control_datas.l_Tp;
+    chassis_dbg.lqr_u[3] = four_control_datas.r_Tp;
     four_control_datas.r_Tleg= PIDCalculate(&r_leg_length_pid,ten_balance_observe.r_leg_length,ten_targets.r_leg_length_target);
     four_control_datas.l_Tleg= PIDCalculate(&l_leg_length_pid,ten_balance_observe.l_leg_length,ten_targets.l_leg_length_target);
     VMC_Calc(&four_control_datas,&r_leg_motor_torques,&r_leg);
@@ -276,8 +291,18 @@ void ChassisTask()
     // DMMotorSetRef(l_front_8009_motor,l_leg_motor_torques.l_Tf );
     // DMMotorSetRef(l_behind_8009_motor,l_leg_motor_torques.l_Tb );
 
-    DJIMotorSetRef(r_wheel_motor,3318.833*four_control_datas.r_Tw);
-    DJIMotorSetRef(l_wheel_motor,l_wheel_direction*3318.833*four_control_datas.l_Tw);
+    /* 轮力矩下发：先按 3508 的真实上限钳位，再换算成电流码。
+     * 限幅必须放在换算之前 —— 见 chassis.h 里 WHEEL_T_MAX 的注释。 */
+    float r_Tw = four_control_datas.r_Tw;
+    float l_Tw = four_control_datas.l_Tw;
+    LIMIT_MIN_MAX(r_Tw, -WHEEL_T_MAX, WHEEL_T_MAX);
+    LIMIT_MIN_MAX(l_Tw, -WHEEL_T_MAX, WHEEL_T_MAX);
+
+    chassis_dbg.Tw_cmd[0] = r_Tw;
+    chassis_dbg.Tw_cmd[1] = l_Tw;
+
+    DJIMotorSetRef(r_wheel_motor, WHEEL_T_PER_RAW * r_Tw);
+    DJIMotorSetRef(l_wheel_motor, l_wheel_direction * WHEEL_T_PER_RAW * l_Tw);
 
     
 

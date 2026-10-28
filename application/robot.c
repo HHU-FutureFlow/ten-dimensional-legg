@@ -57,7 +57,8 @@ void RobotTask()
 #endif
 
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
-    ChassisTask();
+    /* ChassisTask 已挪到独立的 1 kHz 任务(StartCHASSISTASK),不在这里调用,
+     * 否则会跑两遍。这里只保留不需要 1 kHz 的云台和发射。 */
     GimbalTask();
     ShootTask();
 #endif
