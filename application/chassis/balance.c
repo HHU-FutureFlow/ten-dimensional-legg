@@ -5,8 +5,8 @@
 
 void  r_Alpha_beta_calculate(float r_motor_big_leg,float r_motor_small_leg,float r_motor_big_speed,float r_motor_small_speed,r_leg_Resolve *r_leg)
 {
-    r_leg->r_alpha = (r_motor_big_leg -0.136822f);
-    r_leg->r_beta = -(r_motor_big_leg - r_motor_small_leg) + ((31.17*2)*PI/180.0f)-0.019f;
+    r_leg->r_alpha = (r_motor_big_leg -0.67311f);
+    r_leg->r_beta = -(r_motor_big_leg - r_motor_small_leg) + ((31.17*2)*PI/180.0f) + 0.56f;
     r_leg->r_dalpha = r_motor_big_speed;
     r_leg->r_dbeta =r_motor_big_speed - r_motor_small_speed;
 
@@ -91,8 +91,8 @@ void BalanceObserve(ten_balance_observation *ten_observe)
 
 void  l_Alpha_beta_calculate(float l_motor_big_leg,float l_motor_small_leg,float l_motor_big_speed,float l_motor_small_speed,l_leg_Resolve *l_leg)
 {
-    l_leg->l_alpha = (l_motor_big_leg +2.82f);
-    l_leg->l_beta = -(l_motor_big_leg - l_motor_small_leg)-0.77f + ((31.17*2)*PI/180.0f);
+    l_leg->l_alpha = (l_motor_big_leg +2.71234f);
+    l_leg->l_beta = -(l_motor_big_leg - l_motor_small_leg)-0.7599f + ((31.17*2)*PI/180.0f);
     l_leg->l_dalpha = l_motor_big_speed;
     l_leg->l_dbeta =l_motor_big_speed - l_motor_small_speed;
 

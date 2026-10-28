@@ -20,10 +20,21 @@ extern l_leg_motor_torque l_leg_motor_torques;
 
 /* Joint reference positions in radians; adjust in debugger at calibration pose. */
 extern volatile float l_front_zero, l_behind_zero;
-extern volatile float l_front_raw_position, l_behind_raw_position;
-extern volatile unsigned int l_zero_ready;
 /* +1/-1 converts raw left wheel direction to forward; confirm on hardware. */
 extern volatile float l_wheel_direction;
+
+/* 电机反馈量调试映射:在 Ozone/VarScope 全局符号里搜 chassis_dbg 即可
+ * leg_*  : [0]r_front [1]r_behind [2]l_front [3]l_behind
+ * wheel_*: [0]l_wheel [1]r_wheel
+ * 位置单位 rad,速度单位 rad/s,符号与 ChassisTask 内的控制量一致 */
+typedef struct
+{
+    float leg_pos[4];
+    float leg_vel[4];
+    float wheel_pos[2];
+    float wheel_vel[2];
+} Chassis_Dbg_s;
+extern volatile Chassis_Dbg_s chassis_dbg;
 
 /**
  * @brief 底盘应用初始化,请在开启rtos之前调用(目前会被RobotInit()调用)
