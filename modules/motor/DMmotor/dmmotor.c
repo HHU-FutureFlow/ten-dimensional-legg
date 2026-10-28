@@ -41,9 +41,26 @@ static void DMMotorDecode(CANInstance *motor_can)
 
     DaemonReload(motor->motor_daemon);
 
-    measure->last_position = measure->position;
     tmp = (uint16_t)((rxbuff[1] << 8) | rxbuff[2]);
     measure->position = uint_to_float(tmp, DM_P_MIN, DM_P_MAX, 16);
+
+    /* 多圈展开：反馈到 +12.5 后继续转会跳到 -12.5（已实测），两帧之间不可能真的转过半个量程，
+     * 所以差值超过 DM_P_MAX 一定是跳变，据此计圈。第一帧只记录不计圈。 */
+    if (!measure->init_flag)
+    {
+        measure->last_position = measure->position;
+        measure->total_round = 0;
+        /* 第一帧：位置参考先设成当前位置，避免位置模式下拿默认 0 当目标猛冲一下 */
+        if (motor->ctrl_mode == DM_CTRL_POSITION)
+            motor->pid_ref = measure->position;
+        measure->init_flag = 1;
+    }
+    if (measure->position - measure->last_position > DM_P_MAX)
+        measure->total_round--;
+    else if (measure->position - measure->last_position < -DM_P_MAX)
+        measure->total_round++;
+    measure->total_position = measure->position + measure->total_round * (DM_P_MAX - DM_P_MIN);
+    measure->last_position = measure->position;
 
     tmp = (uint16_t)((rxbuff[3] << 4) | rxbuff[4] >> 4);
     measure->velocity = uint_to_float(tmp, DM_V_MIN, DM_V_MAX, 12);
@@ -120,6 +137,20 @@ void DMMotorSetCtrlMode(DMMotorInstance *motor, DMMotorCtrlMode_e mode)
     motor->ctrl_mode = mode;
 }
 
+uint8_t DMMotorNearestPosRef(DMMotorInstance *motor, float target_abs, float *cmd)
+{
+    DM_Motor_Measure_s *m = &motor->measure;
+    if (!m->init_flag || m->total_round != 0)
+        return 0; // 没反馈，或已跨过 ±12.5：电机内部位置环的参考系不确定，不给位置指令
+    float d = target_abs - m->total_position;
+    d -= PI2 * floorf((d + PI) / PI2); // 归一化到 [-π, π)
+    float c = m->position + d;
+    if (c > DM_P_MAX || c < DM_P_MIN)
+        return 0;
+    *cmd = c;
+    return 1;
+}
+
 //@Todo: 目前只实现了力控，更多位控PID等请自行添加
 void DMMotorTask(void const *argument)
 {
@@ -139,7 +170,16 @@ void DMMotorTask(void const *argument)
             set *= -1;
 
 
-        if (motor->ctrl_mode == DM_CTRL_TORQUE)
+        if (!motor->measure.init_flag)
+        {
+            /* 还没收到过反馈：发 Kp=Kd=T=0 的空帧，只为让电机回一帧反馈，不出力 */
+            motor_send_mailbox.position_des = float_to_uint(0, DM_P_MIN, DM_P_MAX, 16);
+            motor_send_mailbox.velocity_des = float_to_uint(0, DM_V_MIN, DM_V_MAX, 12);
+            motor_send_mailbox.torque_des = float_to_uint(0, DM_T_MIN, DM_T_MAX, 12);
+            motor_send_mailbox.Kp = 0;
+            motor_send_mailbox.Kd = 0;
+        }
+        else if (motor->ctrl_mode == DM_CTRL_TORQUE)
     {    
        
         LIMIT_MIN_MAX(set, DM_T_MIN, DM_T_MAX);

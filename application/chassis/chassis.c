@@ -62,10 +62,10 @@ static void ChassisDbgUpdate()
 {
     const float d2r = 0.01745329252f;
 
-    chassis_dbg.leg_pos[0] = r_front_8009_motor->measure.position;
-    chassis_dbg.leg_pos[1] = r_behind_8009_motor->measure.position;
-    chassis_dbg.leg_pos[2] = -l_front_8009_motor->measure.position;
-    chassis_dbg.leg_pos[3] = -l_behind_8009_motor->measure.position;
+    chassis_dbg.leg_pos[0] = r_front_8009_motor->measure.total_position;
+    chassis_dbg.leg_pos[1] = r_behind_8009_motor->measure.total_position;
+    chassis_dbg.leg_pos[2] = -l_front_8009_motor->measure.total_position;
+    chassis_dbg.leg_pos[3] = -l_behind_8009_motor->measure.total_position;
 
     chassis_dbg.leg_vel[0] = r_front_8009_motor->measure.velocity;
     chassis_dbg.leg_vel[1] = r_behind_8009_motor->measure.velocity;
@@ -86,6 +86,21 @@ static void ChassisDbgLqr(const ten_balance_observation *o)
     chassis_dbg.lqr_x[4] = o->l_theta;  chassis_dbg.lqr_x[5] = o->l_dtheta;
     chassis_dbg.lqr_x[6] = o->r_theta;  chassis_dbg.lqr_x[7] = o->r_dtheta;
     chassis_dbg.lqr_x[8] = o->phi;      chassis_dbg.lqr_x[9] = o->dphi;
+}
+
+/* 位置模式下发：目标是标定参考系下的绝对角，自动换成离当前位置最近的等价指令，
+ * 不会因为上电落在另一圈而多转一整圈。
+ * 还没收到反馈：什么都不做（DMMotorTask 此时本来就不出力，等下一拍）；
+ * 已跨过 ±12.5 或指令越界：让该电机泄力并保持泄力（需要人工处理，复位重启即可）。 */
+static void DMSetPosNearest(DMMotorInstance *m, float target_abs)
+{
+    float cmd;
+    if (!m->measure.init_flag)
+        return;
+    if (DMMotorNearestPosRef(m, target_abs, &cmd))
+        DMMotorSetRef(m, cmd);
+    else
+        DMMotorStop(m);
 }
 
 void ChassisInit()
@@ -200,16 +215,17 @@ void ChassisTask()
     /* 使能帧只在 DMMotorInit/DMMotorEnable 里发一次。原来在这里每 5ms 发两帧
      * DM_CMD_MOTOR_MODE，既占 CAN 带宽又打断 MIT 帧时序，已移除。 */
     SetPowerLimit(1000000.0f);   /* @Todo 接裁判系统后换成真实底盘功率 */
-    float r_theta_f=r_front_8009_motor->measure.position;
-    float r_theta_b=r_behind_8009_motor->measure.position;
+    /* 用多圈展开后的连续位置；β 的整圈歧义在 *_Alpha_beta_calculate 里归一化 */
+    float r_theta_f=r_front_8009_motor->measure.total_position;
+    float r_theta_b=r_behind_8009_motor->measure.total_position;
     float r_speed_f=r_front_8009_motor->measure.velocity;
     float r_speed_b=r_behind_8009_motor->measure.velocity;
     float r_wheel_angle=r_wheel_motor->measure.total_angle;
     float r_wheel_w=r_wheel_motor->measure.speed_aps;
 
 
-    float l_theta_f= -l_front_8009_motor->measure.position;
-    float l_theta_b=-l_behind_8009_motor->measure.position;
+    float l_theta_f= -l_front_8009_motor->measure.total_position;
+    float l_theta_b=-l_behind_8009_motor->measure.total_position;
     float l_speed_f=-l_front_8009_motor->measure.velocity;
     float l_speed_b=-l_behind_8009_motor->measure.velocity;
     float l_wheel_angle= -l_wheel_motor->measure.total_angle;
@@ -227,8 +243,8 @@ void ChassisTask()
     ten_targets.phi_target=0;
     ten_targets.dphi_target=0;
 
-    ten_targets.l_leg_length_target = 0.4f;
-    ten_targets.r_leg_length_target = 0.4f;
+    ten_targets.l_leg_length_target = 0.3f;
+    ten_targets.r_leg_length_target = 0.3f;
 
     r_Alpha_beta_calculate(r_theta_f,r_theta_b,r_speed_f,r_speed_b,&r_leg);
     l_Alpha_beta_calculate(l_theta_f,l_theta_b,l_speed_f,l_speed_b,&l_leg);
@@ -263,33 +279,34 @@ void ChassisTask()
     // DJIMotorStop(r_wheel_motor); 
 
     /* Mirror torque as well as position; driver direction remains NORMAL. */
-    // DMMotorSetRef(l_front_8009_motor,
-    //     isfinite(l_leg_motor_torques.l_Tf) ? -l_leg_motor_torques.l_Tf : 0.0f);
-    // DMMotorSetRef(l_behind_8009_motor,
-    //     isfinite(l_leg_motor_torques.l_Tb) ? -l_leg_motor_torques.l_Tb : 0.0f);
-    // DJIMotorSetRef(l_wheel_motor,l_wheel_direction*3318.833*l_control_datas.l_Tw);
+    DMMotorSetRef(l_front_8009_motor,
+        isfinite(l_leg_motor_torques.l_Tf) ? -l_leg_motor_torques.l_Tf : 0.0f);
+    DMMotorSetRef(l_behind_8009_motor,
+        isfinite(l_leg_motor_torques.l_Tb) ? -l_leg_motor_torques.l_Tb : 0.0f);
+    DJIMotorSetRef(l_wheel_motor,l_wheel_direction*3318.833*l_control_datas.l_Tw);
 
 
 
-    DMMotorSetCtrlMode(r_front_8009_motor,  DM_CTRL_POSITION);
-    DMMotorSetCtrlMode(r_behind_8009_motor, DM_CTRL_POSITION);
-    DMMotorSetCtrlMode(l_front_8009_motor,  DM_CTRL_POSITION);
-    DMMotorSetCtrlMode(l_behind_8009_motor, DM_CTRL_POSITION);
+    DMMotorSetCtrlMode(r_front_8009_motor,  DM_CTRL_TORQUE);
+    DMMotorSetCtrlMode(r_behind_8009_motor, DM_CTRL_TORQUE);
+    DMMotorSetCtrlMode(l_front_8009_motor,  DM_CTRL_TORQUE);
+    DMMotorSetCtrlMode(l_behind_8009_motor, DM_CTRL_TORQUE);
 
 
-    DMMotorSetRef(r_front_8009_motor,  -0.03529f);
-    DMMotorSetRef(r_behind_8009_motor, -0.13294f);
-    DMMotorSetRef(l_front_8009_motor,   -2.77733f);
-    DMMotorSetRef(l_behind_8009_motor,  2.31765);
-
-    // DMMotorSetRef(r_front_8009_motor,r_leg_motor_torques.r_Tf );
-
-
+    /* 锁腿目标（原始值，同一位姿差整圈的写法等价，函数会自动取最近的那个） */
+    // DMSetPosNearest(r_front_8009_motor,  -0.03529f);
+    // DMSetPosNearest(r_behind_8009_motor, -0.13294f);
+    // DMSetPosNearest(l_front_8009_motor,  -2.77733f);
+    // DMSetPosNearest(l_behind_8009_motor,  2.31765f);
 
     // DMMotorSetRef(r_front_8009_motor,r_leg_motor_torques.r_Tf );
-    // DMMotorSetRef(r_behind_8009_motor,r_leg_motor_torques.r_Tb );
-    // DMMotorSetRef(l_front_8009_motor,l_leg_motor_torques.l_Tf );
-    // DMMotorSetRef(l_behind_8009_motor,l_leg_motor_torques.l_Tb );
+
+
+
+    DMMotorSetRef(r_front_8009_motor,r_leg_motor_torques.r_Tf );
+    DMMotorSetRef(r_behind_8009_motor,r_leg_motor_torques.r_Tb );
+    DMMotorSetRef(l_front_8009_motor,l_leg_motor_torques.l_Tf );
+    DMMotorSetRef(l_behind_8009_motor,l_leg_motor_torques.l_Tb );
 
     /* 轮力矩下发：先按 3508 的真实上限钳位，再换算成电流码。
      * 限幅必须放在换算之前 —— 见 chassis.h 里 WHEEL_T_MAX 的注释。 */
