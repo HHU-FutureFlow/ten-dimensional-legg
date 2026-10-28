@@ -1,110 +1,50 @@
 #include "LQR.h"
 
-
-
-
-/* 列序: s | ds | yaw | dyaw | lθ | ldθ | rθ | rdθ | φ | dφ
+/* 完整 10 维 LQR，工作点 l=0.30 m，控制周期 1 ms。
+ * 由 lqr_v2/run_all.py 生成，坐标、输入符号与固件一致，不要再翻转任何列。
+ *
+ * 列序: s | ds | yaw | dyaw | lθ | ldθ | rθ | rdθ | φ | dφ
  * 行序: [0]=l_Tw(左轮) [1]=r_Tw(右轮) [2]=l_Tp(左腿) [3]=r_Tp(右腿)
+ * 控制律: T = -K(x-x_ref)，对应下方 control_datas = -u。
  *
- * 这一份由 lqr_sim 按「板凳模式(髋锁死、腿跑 DM_CTRL_POSITION) + 1 kHz 控制」重新设计，
- * 参数取自 标定结果.docx：
- *   m_b=4.326 m_l=1.674 m_w=0.5   l=0.4 l_w=0.2933 l_b=0.1067 l_c=0.00494
- *   R_w=0.06 R_l=0.24 I_z=0.367   I_b=0.0419 I_l=0.0257 I_w=6.95e-4
- * 复核：闭环最大实部 -0.974；phi 收到 0.1rad 扰动时峰值力矩 3.86 N·m（3508 上限 4.94）
- *
- * !! 必须配合 1 kHz 的 ChassisTask 使用 !!（见 robot_task.h 的 StartCHASSISTASK）
- *    200 Hz 下这份 K 的延迟裕度几乎为 0，表现为「扰动后朝一个方向冲出去、
- *    停不下来、最后高频抖」。详见 lqr_sim/delay_check.py
- *
- * 符号约定（已按 标定结果.docx + 实车验证 核对）：
- *   s 前移为正 / yaw 逆时针为正 / l_theta 轮心在髋前为正
- *   phi = -IMU.Pitch，车头上抬时 Pitch 减小 => phi 增大，
- *   即 **phi > 0 是后仰**，与模型里的 θb(前倾为正) 反号
- *   => φ / dφ 两列取正号（其余列与模型同号），不要动
- *   T_lw > 0 = 轮子向前推
+ * s/ds：车前进为正；yaw/dyaw：左转为正。
+ * θ/dθ：轮心在髋前为正；φ/dφ：车头上抬为正，即 -Pitch/-Gyro[0]。
+ * Tw>0：轮子前滚；Tp>0：轮子相对机体向前摆。
  */
-// float K[4][10] =
-// {
-//     {  -4.588103f,  -6.865852f,  -9.292940f,  -1.309910f,  0.0f,  0.0f,  0.0f,  0.0f,  +42.486446f,  +5.115469f },
-//     {  -4.588103f,  -6.865852f,  +9.292940f,  +1.309910f,  0.0f,  0.0f,  0.0f,  0.0f,  +42.486446f,  +5.115469f },
-//     {   0.0f,        0.0f,        0.0f,        0.0f,       0.0f,  0.0f,  0.0f,  0.0f,    0.0f,         0.0f        },
-//     {   0.0f,        0.0f,        0.0f,        0.0f,       0.0f,  0.0f,  0.0f,  0.0f,    0.0f,         0.0f        }
-// };
-
 float K[4][10] =
 {
-    { -2.552835f, -2.906364f, -1.218314f, -0.485412f,  +7.493410f, +1.310637f,  +3.382351f, +0.673951f,  +1.797256f, +0.339006f },
-    { -2.552835f, -2.906364f, +1.218314f, +0.485412f,  +3.382351f, +0.673951f,  +7.493410f, +1.310637f,  +1.797256f, +0.339006f },
-    {   0.0f,        0.0f,        0.0f,        0.0f,       0.0f,  0.0f,  0.0f,  0.0f,    0.0f,         0.0f        },
-    {   0.0f,        0.0f,        0.0f,        0.0f,       0.0f,  0.0f,  0.0f,  0.0f,    0.0f,         0.0f        }
+    {   -1.688633f,   -1.973978f,   -0.804423f,   -0.359825f,   +5.452686f,   +0.971232f,   +2.628934f,   +0.491476f,   +1.473152f,   +0.252954f },
+    {   -1.688633f,   -1.973978f,   +0.804423f,   +0.359825f,   +2.628934f,   +0.491476f,   +5.452686f,   +0.971232f,   +1.473152f,   +0.252954f },
+    {   -1.698882f,   -1.795105f,   +4.623380f,   +1.902628f,   +8.526657f,   +1.020029f,   -3.080438f,   -0.018919f,  -21.995711f,   -1.338773f },
+    {   -1.698882f,   -1.795105f,   -4.623380f,   -1.902628f,   -3.080438f,   -0.018919f,   +8.526657f,   +1.020029f,  -21.995711f,   -1.338773f }
 };
 
-// float K[4][10] =
-// {
-//     {  4.042174f,  20.240416f, -137.789048f, -6.202160f, -16.701273f, -0.877369f,  -5.017493f, -0.017654f,  44.356862f,  6.399397f },
-//     {  2.802098f,  27.349857f,  103.030310f,  3.852446f,  -5.513473f, -0.095412f, -21.040766f, -0.783158f,  51.320052f,  6.305144f },
-//     {     0.0f,        0.0f,        0.0f,        0.0f,       0.0f,  0.0f,  0.0f,  0.0f,    0.0f,         0.0f        },
-//     {   0.0f,        0.0f,        0.0f,        0.0f,       0.0f,  0.0f,  0.0f,  0.0f,    0.0f,         0.0f        }
-// };
-// float K[4][10] =
-// {
+float rate = 1.0f;
 
-//     { -4.117583f, -6.170474f, -8.771668f, -1.254548f, +0.000000f, -0.000000f, +0.000000f, +0.000000f, -38.577098f, -4.671927f },
-//     { -4.117583f, -6.170474f, +8.771668f, +1.254548f, +0.000000f, -0.000000f, +0.000000f, +0.000000f, -38.577098f, -4.671927f },
-//     {  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f   },
-//     {  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f   }
-// };
-
-// float K[4][10] =
-// {
-
-//     { -4.064963f, -5.241625f, -8.587435f, -1.227949f, -13.289982f, -1.849487f, -10.117613f, -1.639647f, -3.306523f, -0.269098f },
-//     { -4.064963f, -5.241625f, +8.587435f, +1.227949f, -10.117613f, -1.639647f, -13.289982f, -1.849487f, -3.306523f, -0.269098f },
-//     { +0.943614f, +1.163789f, -4.659963f, -0.870554f, +28.898089f, +2.610849f, -24.255962f, -1.961573f, -54.685356f, -1.738948f },
-//     { +0.943614f, +1.163789f, +4.659963f, +0.870554f, -24.255962f, -1.961573f, +28.898089f, +2.610849f, -54.685356f, -1.738948f }
-// };
-// float K[4][10] =
-// {
-//     {  4.042174f,  20.240416f, -137.789048f, -6.202160f, -16.701273f, -0.877369f,  -5.017493f, -0.017654f,  -44.356862f,  -6.399397f },
-//     {  2.802098f,  27.349857f,  103.030310f,  3.852446f,  -5.513473f, -0.095412f, -21.040766f, -0.783158f,  -51.320052f,  -6.305144f },
-//     {  3.555269f, -35.952177f, -929.901337f, -29.292768f, 133.423882f,  5.064401f, -29.160967f, -0.818225f,  -94.202648f, -33.618322f },
-//     { -19.424088f, -17.610095f, 1055.445938f, 32.794986f, -42.803231f, -1.247324f, 109.567419f,  3.972082f, -145.568572f, -42.591322f }
-// };
-float rate = 1.0f;   /* 定稿必须是 1.0；调试期可临时降到 0.3 试水 */
-float x[10];
-float u[4];
-
-void LQR_calc(ten_balance_observation *observe,ten_balance_target *balance_targets,four_control_data *control_datas)
+void LQR_calc(ten_balance_observation *observe, ten_balance_target *balance_targets, four_control_data *control_datas)
 {
     float x[10];
-    float u[4];
+    float u[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
-    x[0]=observe->s-balance_targets->s_target;
-    x[1]=observe->ds-balance_targets->ds_target;
-    x[2]=observe->yaw-balance_targets->yaw_target;
-    x[3]=observe->dyaw-balance_targets->dyaw_target;
-    x[4]=observe->l_theta-balance_targets->l_theta_target;
-    x[5]=observe->l_dtheta-balance_targets->l_dtheta_target;
-    x[6]=observe->r_theta-balance_targets->r_theta_target;
-    x[7]=observe->r_dtheta-balance_targets->r_dtheta_target;
-    x[8]=observe->phi-balance_targets->phi_target;
-    x[9]=observe->dphi-balance_targets->dphi_target;
+    x[0] = observe->s - balance_targets->s_target;
+    x[1] = observe->ds - balance_targets->ds_target;
+    x[2] = observe->yaw - balance_targets->yaw_target;
+    x[3] = observe->dyaw - balance_targets->dyaw_target;
+    x[4] = observe->l_theta - balance_targets->l_theta_target;
+    x[5] = observe->l_dtheta - balance_targets->l_dtheta_target;
+    x[6] = observe->r_theta - balance_targets->r_theta_target;
+    x[7] = observe->r_dtheta - balance_targets->r_dtheta_target;
+    x[8] = observe->phi - balance_targets->phi_target;
+    x[9] = observe->dphi - balance_targets->dphi_target;
 
-    for (int i = 0; i < 4; i++) {
-        u[i] = 0.0;
-        for (int j = 0; j < 10; j++) {
+    for (int i = 0; i < 4; i++)
+    {
+        for (int j = 0; j < 10; j++)
             u[i] += rate * K[i][j] * x[j];
-        }
     }
 
-    control_datas->l_Tw=-u[0];
-    control_datas->r_Tw=-u[1];
-    control_datas->l_Tp=-u[2];
-    control_datas->r_Tp=-u[3];
-
-
+    control_datas->l_Tw = -u[0];
+    control_datas->r_Tw = -u[1];
+    control_datas->l_Tp = -u[2];
+    control_datas->r_Tp = -u[3];
 }
-
-
-
-

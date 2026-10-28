@@ -33,14 +33,20 @@ extern volatile float l_wheel_direction;
  * 否则 3318.833*8 = 26550 会溢出成负数、电流乱跳。 */
 #define WHEEL_T_MAX       (4.90f)
 
+/* 每条腿的重力前馈：(m_body + m_leg) / 2 * g ≈ 29 N。
+ * 与腿长 PID 输出相加后作为 VMC 的虚拟腿长力 F。 */
+#define LEG_GRAVITY_FF    (29.0f)
+
 /* 电机反馈量调试映射:在 Ozone/VarScope 全局符号里搜 chassis_dbg 即可
  * leg_*  : [0]r_front [1]r_behind [2]l_front [3]l_behind
  * wheel_*: [0]l_wheel [1]r_wheel
  * 位置单位 rad,速度单位 rad/s,符号与 ChassisTask 内的控制量一致
  *
  * lqr_x[] 是喂进 LQR 的 10 个状态（单位: m, m/s, rad, rad/s），
- * lqr_u[] 是 LQR 算出的 4 个力矩（N·m），
- * Tw_cmd[] 是限幅后真正下发的轮力矩（N·m）。
+ * lqr_u[]     : [0]l_Tw [1]r_Tw [2]l_Tp [3]r_Tp，LQR 输出（N·m）
+ * Fleg_cmd[]  : [0]左腿 [1]右腿，重力前馈+PID 后的虚拟腿长力（N）
+ * joint_T_cmd : [0]r_front [1]r_behind [2]l_front [3]l_behind，实际关节力矩指令（N·m）
+ * Tw_cmd[]    : [0]左轮 [1]右轮，限幅后真正下发的轮力矩（N·m）
  * 排查"往一个方向跑不停"时看这三个：
  *   phi 变负 + Tw 变正            -> 俯仰环方向对
  *   车体回正了但 Tw 不换号        -> s/ds 环没起作用
@@ -54,6 +60,8 @@ typedef struct
 
     float lqr_x[10];
     float lqr_u[4];
+    float Fleg_cmd[2];
+    float joint_T_cmd[4];
     float Tw_cmd[2];
 } Chassis_Dbg_s;
 extern volatile Chassis_Dbg_s chassis_dbg;

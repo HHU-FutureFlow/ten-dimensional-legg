@@ -88,21 +88,6 @@ static void ChassisDbgLqr(const ten_balance_observation *o)
     chassis_dbg.lqr_x[8] = o->phi;      chassis_dbg.lqr_x[9] = o->dphi;
 }
 
-/* 位置模式下发：目标是标定参考系下的绝对角，自动换成离当前位置最近的等价指令，
- * 不会因为上电落在另一圈而多转一整圈。
- * 还没收到反馈：什么都不做（DMMotorTask 此时本来就不出力，等下一拍）；
- * 已跨过 ±12.5 或指令越界：让该电机泄力并保持泄力（需要人工处理，复位重启即可）。 */
-static void DMSetPosNearest(DMMotorInstance *m, float target_abs)
-{
-    float cmd;
-    if (!m->measure.init_flag)
-        return;
-    if (DMMotorNearestPosRef(m, target_abs, &cmd))
-        DMMotorSetRef(m, cmd);
-    else
-        DMMotorStop(m);
-}
-
 void ChassisInit()
 {
     chassis_IMU_data = INS_Init();
@@ -185,10 +170,10 @@ void ChassisInit()
     static PID_Init_Config_s r_leg_length_pid_config = 
 
     {
-        .Kp = 90.0f,  
+        .Kp = 800.0f,
         .Ki = 0.0f,
         .Kd = 0.0f,
-        .MaxOut = 9000.0f,
+        .MaxOut = 150.0f,
         .DeadBand = 0.0f,
         .Improve = PID_Integral_Limit | PID_Derivative_On_Measurement,
         .IntegralLimit = 0.0f,
@@ -257,56 +242,44 @@ void ChassisTask()
     chassis_dbg.lqr_u[1] = four_control_datas.r_Tw;
     chassis_dbg.lqr_u[2] = four_control_datas.l_Tp;
     chassis_dbg.lqr_u[3] = four_control_datas.r_Tp;
-    four_control_datas.r_Tleg= PIDCalculate(&r_leg_length_pid,ten_balance_observe.r_leg_length,ten_targets.r_leg_length_target);
-    four_control_datas.l_Tleg= PIDCalculate(&l_leg_length_pid,ten_balance_observe.l_leg_length,ten_targets.l_leg_length_target);
-    VMC_Calc(&four_control_datas,&r_leg_motor_torques,&r_leg);
-    l_VMC_Calc(&four_control_datas,&l_leg_motor_torques,&l_leg);
-    
-    
+    /* 虚拟腿长力 = 重力前馈 + 腿长 PID；VMC 内部再按修正后的 J^T 映射。 */
+    four_control_datas.r_Tleg = LEG_GRAVITY_FF
+        + PIDCalculate(&r_leg_length_pid, ten_balance_observe.r_leg_length, ten_targets.r_leg_length_target);
+    four_control_datas.l_Tleg = LEG_GRAVITY_FF
+        + PIDCalculate(&l_leg_length_pid, ten_balance_observe.l_leg_length, ten_targets.l_leg_length_target);
+    chassis_dbg.Fleg_cmd[0] = four_control_datas.l_Tleg;
+    chassis_dbg.Fleg_cmd[1] = four_control_datas.r_Tleg;
 
+    VMC_Calc(&four_control_datas, &r_leg_motor_torques, &r_leg);
+    l_VMC_Calc(&four_control_datas, &l_leg_motor_torques, &l_leg);
 
-    
+    chassis_dbg.joint_T_cmd[0] = r_leg_motor_torques.r_Tf;
+    chassis_dbg.joint_T_cmd[1] = r_leg_motor_torques.r_Tb;
+    chassis_dbg.joint_T_cmd[2] = l_leg_motor_torques.l_Tf;
+    chassis_dbg.joint_T_cmd[3] = l_leg_motor_torques.l_Tb;
 
-    // DMMotorSetRef(r_front_8009_motor,0.01f );
-    // DMMotorSetRef(r_behind_8009_motor,0.01f);
-    // DJIMotorSetRef(r_wheel_motor,3318.833*r_control_datas.r_Tw);
 
     // DMMotorStop(r_front_8009_motor);
     // DMMotorStop(r_behind_8009_motor);
     // DMMotorStop(l_front_8009_motor);
     // DMMotorStop(l_behind_8009_motor);
     // DJIMotorStop(l_wheel_motor);
-    // DJIMotorStop(r_wheel_motor); 
-
-    /* Mirror torque as well as position; driver direction remains NORMAL. */
-    DMMotorSetRef(l_front_8009_motor,
-        isfinite(l_leg_motor_torques.l_Tf) ? -l_leg_motor_torques.l_Tf : 0.0f);
-    DMMotorSetRef(l_behind_8009_motor,
-        isfinite(l_leg_motor_torques.l_Tb) ? -l_leg_motor_torques.l_Tb : 0.0f);
-    DJIMotorSetRef(l_wheel_motor,l_wheel_direction*3318.833*l_control_datas.l_Tw);
-
-
+    // DJIMotorStop(r_wheel_motor);
 
     DMMotorSetCtrlMode(r_front_8009_motor,  DM_CTRL_TORQUE);
     DMMotorSetCtrlMode(r_behind_8009_motor, DM_CTRL_TORQUE);
     DMMotorSetCtrlMode(l_front_8009_motor,  DM_CTRL_TORQUE);
     DMMotorSetCtrlMode(l_behind_8009_motor, DM_CTRL_TORQUE);
 
-
-    /* 锁腿目标（原始值，同一位姿差整圈的写法等价，函数会自动取最近的那个） */
-    // DMSetPosNearest(r_front_8009_motor,  -0.03529f);
-    // DMSetPosNearest(r_behind_8009_motor, -0.13294f);
-    // DMSetPosNearest(l_front_8009_motor,  -2.77733f);
-    // DMSetPosNearest(l_behind_8009_motor,  2.31765f);
-
-    // DMMotorSetRef(r_front_8009_motor,r_leg_motor_torques.r_Tf );
-
-
-
-    DMMotorSetRef(r_front_8009_motor,r_leg_motor_torques.r_Tf );
-    DMMotorSetRef(r_behind_8009_motor,r_leg_motor_torques.r_Tb );
-    DMMotorSetRef(l_front_8009_motor,l_leg_motor_torques.l_Tf );
-    DMMotorSetRef(l_behind_8009_motor,l_leg_motor_torques.l_Tb );
+    /* l_VMC_Calc 已换回原电机坐标，左腿下发时不能再加负号。 */
+    DMMotorSetRef(r_front_8009_motor,
+        isfinite(r_leg_motor_torques.r_Tf) ? r_leg_motor_torques.r_Tf : 0.0f);
+    DMMotorSetRef(r_behind_8009_motor,
+        isfinite(r_leg_motor_torques.r_Tb) ? r_leg_motor_torques.r_Tb : 0.0f);
+    DMMotorSetRef(l_front_8009_motor,
+        isfinite(l_leg_motor_torques.l_Tf) ? l_leg_motor_torques.l_Tf : 0.0f);
+    DMMotorSetRef(l_behind_8009_motor,
+        isfinite(l_leg_motor_torques.l_Tb) ? l_leg_motor_torques.l_Tb : 0.0f);
 
     /* 轮力矩下发：先按 3508 的真实上限钳位，再换算成电流码。
      * 限幅必须放在换算之前 —— 见 chassis.h 里 WHEEL_T_MAX 的注释。 */
@@ -315,8 +288,8 @@ void ChassisTask()
     LIMIT_MIN_MAX(r_Tw, -WHEEL_T_MAX, WHEEL_T_MAX);
     LIMIT_MIN_MAX(l_Tw, -WHEEL_T_MAX, WHEEL_T_MAX);
 
-    chassis_dbg.Tw_cmd[0] = r_Tw;
-    chassis_dbg.Tw_cmd[1] = l_Tw;
+    chassis_dbg.Tw_cmd[0] = l_Tw;
+    chassis_dbg.Tw_cmd[1] = r_Tw;
 
     DJIMotorSetRef(r_wheel_motor, WHEEL_T_PER_RAW * r_Tw);
     DJIMotorSetRef(l_wheel_motor, l_wheel_direction * WHEEL_T_PER_RAW * l_Tw);

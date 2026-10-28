@@ -39,7 +39,7 @@ void RobotInit()
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     ChassisInit();
     GimbalInit();
-    ShootInit();
+    // ShootInit();
 #endif
 
     OSTaskInit(); // 创建基础任务
