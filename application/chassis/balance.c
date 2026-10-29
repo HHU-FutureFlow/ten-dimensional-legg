@@ -16,14 +16,15 @@ static float wrap_angle(float a, float lo)
 void  r_Alpha_beta_calculate(float r_motor_big_leg,float r_motor_small_leg,float r_motor_big_speed,float r_motor_small_speed,r_leg_Resolve *r_leg)
 {
     /* 2026-10-28 新标定（标定结果.docx 横线下方）：
-     * α 零点 = "大腿居中"(=大腿竖直) 读数：左 3.49184 / 右 0.62886
+     * α 零点 = "大腿居中"(=大腿竖直) 读数：左 3.49184 / 右 0.61246（10-29 第三次仅右腿重标）
      * β 偏置 = "腿最长"(轮心位于髋正下方) 姿态：对称位形 β = -2α_firmware，
      *   左 α2=-0.53445 → β2=1.06890, Δ2=5.54055 → 偏置 6.60945
-     *   右 α2=-0.49286 → β2=0.98572, Δ2=0.58976 → 偏置 1.57548
+     *   右 α2=-0.50698 → β2=1.01396, Δ2=0.59091 → 偏置 1.60487（10-29 重标）
      * 旧 31.17°x2 装配常数属旧编码器零点，已并入偏置。
-     * 自检：左腿新偏置 6.60945 ≈ 旧 0.32781 + 2π(跨圈) = 6.61100，差 0.0016 rad。 */
-    r_leg->r_alpha = (r_motor_big_leg - 0.62886f);
-    r_leg->r_beta = -(r_motor_big_leg - r_motor_small_leg) + 1.57548f;
+     * 自检：左腿新偏置 6.60945 ≈ 旧 0.32781 + 2π(跨圈) = 6.61100，差 0.0016 rad。
+     * 右 β 三代对比：1.64771(第2代) / 1.57548(第3代) / 1.60487(本次)，本次居中。 */
+    r_leg->r_alpha = (r_motor_big_leg - 0.61246f);
+    r_leg->r_beta = -(r_motor_big_leg - r_motor_small_leg) + 1.60487f;
     r_leg->r_alpha = wrap_angle(r_leg->r_alpha, -PI);
     r_leg->r_beta  = wrap_angle(r_leg->r_beta, BETA_WRAP_LO);
     r_leg->r_dalpha = r_motor_big_speed;

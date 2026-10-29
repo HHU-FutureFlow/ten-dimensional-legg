@@ -272,12 +272,18 @@ void ChassisTask()
                       - LEG_KV_VEL * r_dot;
     LIMIT_MIN_MAX(l_pid_out, -150.0f, 150.0f);   /* 沿用原 PID MaxOut=150 */
     LIMIT_MIN_MAX(r_pid_out, -150.0f, 150.0f);
-    four_control_datas.l_Tleg = LEG_GRAVITY_FF + l_pid_out;
-    four_control_datas.r_Tleg = LEG_GRAVITY_FF + r_pid_out;
+    /* Roll 补偿（手册 §8.2）：右倾(roll<0)时右腿加力、左腿减力。
+     * Roll 单位度 -> rad；Gyro[1] 为 roll 角速度(rad/s)。 */
+    float roll_rad = chassis_IMU_data->Roll * 0.01745329252f;
+    float dF_roll = ROLL_COMP_DIR * (ROLL_KP * (-roll_rad) - ROLL_KD * chassis_IMU_data->Gyro[1]);
+    four_control_datas.l_Tleg = LEG_GRAVITY_FF + l_pid_out - dF_roll;
+    four_control_datas.r_Tleg = LEG_GRAVITY_FF + r_pid_out + dF_roll;
     chassis_dbg.Fleg_cmd[0] = four_control_datas.l_Tleg;
     chassis_dbg.Fleg_cmd[1] = four_control_datas.r_Tleg;
     chassis_dbg.Ldot[0] = l_dot;
     chassis_dbg.Ldot[1] = r_dot;
+    chassis_dbg.Roll = chassis_IMU_data->Roll;
+    chassis_dbg.dFroll = dF_roll;
 
     VMC_Calc(&four_control_datas, &r_leg_motor_torques, &r_leg);
     l_VMC_Calc(&four_control_datas, &l_leg_motor_torques, &l_leg);

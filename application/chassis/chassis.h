@@ -46,6 +46,14 @@ extern volatile float l_wheel_direction;
 /* Ldot 一阶 LPF 系数（1kHz 循环），截止约 25 Hz */
 #define LEG_VEL_LPF       (0.15f)
 
+/* Roll 补偿（手册 §8.2，符号按本机 IMU 实测定）：
+ * ΔF = ROLL_KP*(-roll) - ROLL_KD*gyro[1]，右腿 += ΔF，左腿 -= ΔF。
+ * 实测 roll=-3.9°(右倾) 时 ΔF>0 -> 右腿加力扶正。
+ * 若上车后 roll 发散，把 ROLL_COMP_DIR 翻成 -1.0f。 */
+#define ROLL_KP           (100.0f)   /* N/rad */
+#define ROLL_KD           (10.0f)    /* N/(rad/s) */
+#define ROLL_COMP_DIR     (1.0f)
+
 /* 电机反馈量调试映射:在 Ozone/VarScope 全局符号里搜 chassis_dbg 即可
  * leg_*  : [0]r_front [1]r_behind [2]l_front [3]l_behind
  * wheel_*: [0]l_wheel [1]r_wheel
@@ -73,6 +81,8 @@ typedef struct
     float Ldot[2];        /* [0]左 [1]右，腿长速度估计（m/s），低通后 */
     float joint_T_cmd[4];
     float Tw_cmd[2];
+    float Roll;           /* IMU roll，度，调试 roll 补偿用 */
+    float dFroll;         /* roll 补偿力差 ΔF（N），右腿为正 */
 } Chassis_Dbg_s;
 extern volatile Chassis_Dbg_s chassis_dbg;
 
