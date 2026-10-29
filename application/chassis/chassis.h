@@ -37,6 +37,15 @@ extern volatile float l_wheel_direction;
  * 与腿长 PID 输出相加后作为 VMC 的虚拟腿长力 F。 */
 #define LEG_GRAVITY_FF    (29.0f)
 
+/* 腿长 P-P 级联（手册 §8.1）：F = FF + Kp*(Ldes-L) - Kv*Ldot
+ * Kp_pos: 位置刚度 N/m；Kv_vel: 轴向阻尼 N/(m/s)。
+ * 垂直支撑 k=2*Kp=1600 N/m、等效质量 ~15 kg -> 固有频率 1.6 Hz，
+ * 临界阻尼需每腿 ~155 N/(m/s)，100 对应阻尼比 ~0.65，可调 60~200。 */
+#define LEG_KP_POS        (800.0f)
+#define LEG_KV_VEL        (100.0f)
+/* Ldot 一阶 LPF 系数（1kHz 循环），截止约 25 Hz */
+#define LEG_VEL_LPF       (0.15f)
+
 /* 电机反馈量调试映射:在 Ozone/VarScope 全局符号里搜 chassis_dbg 即可
  * leg_*  : [0]r_front [1]r_behind [2]l_front [3]l_behind
  * wheel_*: [0]l_wheel [1]r_wheel
@@ -61,6 +70,7 @@ typedef struct
     float lqr_x[10];
     float lqr_u[4];
     float Fleg_cmd[2];
+    float Ldot[2];        /* [0]左 [1]右，腿长速度估计（m/s），低通后 */
     float joint_T_cmd[4];
     float Tw_cmd[2];
 } Chassis_Dbg_s;

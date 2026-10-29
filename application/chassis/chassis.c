@@ -19,11 +19,45 @@
 static DMMotorInstance *r_front_8009_motor,*r_behind_8009_motor;
 static DMMotorInstance *l_front_8009_motor, *l_behind_8009_motor;
 static DJIMotorInstance *l_wheel_motor, *r_wheel_motor;
-static PIDInstance l_leg_length_pid;
-static PIDInstance r_leg_length_pid;
 
 static PIDInstance l_theta_pid;
 static PIDInstance r_theta_pid;
+
+/* 腿长速度估计状态（P-P 级联的阻尼项用） */
+typedef struct
+{
+    float last_L;      /* 上次变化的腿长读数 */
+    float dt_acc;      /* 距上次变化的累计时间 s */
+    float raw;         /* 本拍差分原始值 */
+    float filt;        /* 低通后的 Ldot */
+    uint8_t started;
+} LegVelState_s;
+static LegVelState_s l_legvel, r_legvel;
+
+/* Ldot 估计：DM 反馈 500Hz，1kHz 循环里差分隔拍为 0，
+ * 必须按"上次变化以来的累计时间"归一，否则均值少一半。 */
+static float LegVelEst(float L, LegVelState_s *st)
+{
+    if (!st->started)
+    {
+        st->last_L = L;
+        st->started = 1;
+        return 0.0f;
+    }
+    st->dt_acc += 0.001f;
+    if (L != st->last_L)
+    {
+        st->raw = (L - st->last_L) / st->dt_acc;
+        st->last_L = L;
+        st->dt_acc = 0.0f;
+    }
+    else
+    {
+        st->raw = 0.0f;
+    }
+    st->filt += LEG_VEL_LPF * (st->raw - st->filt);
+    return st->filt;
+}
 
 attitude_t *chassis_IMU_data;
 r_leg_Resolve r_leg;
@@ -167,22 +201,9 @@ void ChassisInit()
 
 
 
-    static PID_Init_Config_s r_leg_length_pid_config = 
-
-    {
-        .Kp = 800.0f,
-        .Ki = 0.0f,
-        .Kd = 0.0f,
-        .MaxOut = 150.0f,
-        .DeadBand = 0.0f,
-        .Improve = PID_Integral_Limit | PID_Derivative_On_Measurement,
-        .IntegralLimit = 0.0f,
-    };
-
-
-    PIDInit(&r_leg_length_pid, &r_leg_length_pid_config);
-    PID_Init_Config_s l_leg_length_pid_config = r_leg_length_pid_config;
-    PIDInit(&l_leg_length_pid, &l_leg_length_pid_config);
+    /* 腿长 P-P 级联（手册 §8.1）取代原单环 PID：
+     * F = 重力前馈 + Kp_pos*(Ldes-L) - Kv_vel*Ldot
+     * 正方向：F>0 = 伸腿（VMC.c 的 Tf=-gF, Tb=+gF 链路，实车已验证）。 */
 
 
 
@@ -243,12 +264,20 @@ void ChassisTask()
     chassis_dbg.lqr_u[2] = four_control_datas.l_Tp;
     chassis_dbg.lqr_u[3] = four_control_datas.r_Tp;
     /* 虚拟腿长力 = 重力前馈 + 腿长 PID；VMC 内部再按修正后的 J^T 映射。 */
-    four_control_datas.r_Tleg = LEG_GRAVITY_FF
-        + PIDCalculate(&r_leg_length_pid, ten_balance_observe.r_leg_length, ten_targets.r_leg_length_target);
-    four_control_datas.l_Tleg = LEG_GRAVITY_FF
-        + PIDCalculate(&l_leg_length_pid, ten_balance_observe.l_leg_length, ten_targets.l_leg_length_target);
+    float l_dot = LegVelEst(ten_balance_observe.l_leg_length, &l_legvel);
+    float r_dot = LegVelEst(ten_balance_observe.r_leg_length, &r_legvel);
+    float l_pid_out = LEG_KP_POS * (ten_targets.l_leg_length_target - ten_balance_observe.l_leg_length)
+                      - LEG_KV_VEL * l_dot;
+    float r_pid_out = LEG_KP_POS * (ten_targets.r_leg_length_target - ten_balance_observe.r_leg_length)
+                      - LEG_KV_VEL * r_dot;
+    LIMIT_MIN_MAX(l_pid_out, -150.0f, 150.0f);   /* 沿用原 PID MaxOut=150 */
+    LIMIT_MIN_MAX(r_pid_out, -150.0f, 150.0f);
+    four_control_datas.l_Tleg = LEG_GRAVITY_FF + l_pid_out;
+    four_control_datas.r_Tleg = LEG_GRAVITY_FF + r_pid_out;
     chassis_dbg.Fleg_cmd[0] = four_control_datas.l_Tleg;
     chassis_dbg.Fleg_cmd[1] = four_control_datas.r_Tleg;
+    chassis_dbg.Ldot[0] = l_dot;
+    chassis_dbg.Ldot[1] = r_dot;
 
     VMC_Calc(&four_control_datas, &r_leg_motor_torques, &r_leg);
     l_VMC_Calc(&four_control_datas, &l_leg_motor_torques, &l_leg);
