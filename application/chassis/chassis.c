@@ -28,7 +28,25 @@ static Subscriber_t *chassis_cmd_sub;
 static Chassis_Ctrl_Cmd_s chassis_cmd_recv;
 #define RC_DRIVE_ACTIVE_VX 0.02f /* m/s, |vx|低于此视为松杆→定点 */
 #define RC_YAW_ACTIVE_WZ   0.05f /* rad/s, |wz|低于此视为无偏航输入 */
-#define YAW_FOLLOW_TAU     2.0f  /* s, 无偏航输入时 yaw_target 向实测 yaw 泄漏的时间常数 */
+#define YAW_FOLLOW_TAU     30.0f /* s, yaw_target 慢跟随时间常数：吸收陀螺Z零偏漂移(实测-2.5°/min)，残留误差≈漂移×τ≈0.02rad */
+
+/* ===== 关节库仑摩擦前馈（2026-10-30）=====
+ * 实测左髋静摩擦 ≥2 N·m（右腿可随意掰动，左腿小腿需相当力气），死区让 LQR 的
+ * 差动 Tp 全被右腿吸收（剪刀只走一条腿）。补偿加在各自关节、电机自身坐标：
+ *   T_ff = T_c * tanh(ω / ω0)
+ * tanh 平滑过零防 1kHz 抖振。T_c 为 volatile 全局，可在调试器在线调：
+ * 左腿 0.5 起调（手测静摩擦大），右腿先 0（过补会变负阻尼、诱发极限环）。
+ * 判据：左右腿手掰阻力对称；注意 ω=0 时补偿为 0，静止突破仍靠平衡自振。 */
+volatile float l_joint_fric_t = 1.0f;   /* N·m/关节, 左腿 */
+volatile float r_joint_fric_t = 0.1f;   /* N·m/关节, 右腿 */
+#define FRICTION_TANH_W0  (0.15f)       /* rad/s, tanh 速度平滑尺度 */
+
+/* 陀螺Z轴零偏(rad/s)，零力态两段式自动标定（见 ChassisTask 零力分支）：
+ * 前 2s 固定窗口均值快速收敛，之后慢 EMA(τ≈10s) 跟踪温度漂移。
+ * 实测车静止时 yaw 以 -2.5°/min 匀速漂（QEKF 强制 GyroBias[2]=0，Z 轴不可观测），
+ * 此处从控制用的 yaw/dyaw 中扣除。调试器可查/可改。 */
+volatile float gyro_z_bias = 0.0f;
+volatile uint8_t gyro_z_calib_stage = 0; /* 0=未开始 1=快采中 2=完成(EMA跟踪),ep 可观测 */
 
 /* 腿长速度估计状态（P-P 级联的阻尼项用） */
 typedef struct
@@ -64,6 +82,12 @@ static float LegVelEst(float L, LegVelState_s *st)
     }
     st->filt += LEG_VEL_LPF * (st->raw - st->filt);
     return st->filt;
+}
+
+/* 归一化到 (-π, π]，用于 yaw 增量差分跨 ±180° 卷绕 */
+static float wrap_pi(float a)
+{
+    return a - 2.0f * PI * roundf(a / (2.0f * PI));
 }
 
 attitude_t *chassis_IMU_data;
@@ -236,6 +260,13 @@ void ChassisTask()
     SubGetMessage(chassis_cmd_sub, (void *)&chassis_cmd_recv);
     static uint8_t zero_force_last = 0;
     static uint8_t drive_last = 0; /* 行驶模式锁存,零力恢复时置0强制重新锚定 */
+    static uint8_t standing_last = 0; /* 站立测试模式锁存,进入沿锚定 yaw */
+    /* 陀螺Z零偏标定状态 + 去零偏 yaw 积分状态 */
+    static float bias_ema = 0.0f;
+    static uint16_t calib_cnt = 0;
+    static float calib_acc = 0.0f;
+    static float yaw_ctrl = 0.0f;      /* 去零偏后的 yaw(rad),喂给 LQR */
+    static float yaw_raw_prev = 0.0f;  /* 上一拍 raw yaw(rad),做增量 */
     uint8_t zero_force = (chassis_cmd_recv.chassis_mode == CHASSIS_ZERO_FORCE);
     if (zero_force != zero_force_last)
     {
@@ -247,6 +278,7 @@ void ChassisTask()
             DMMotorStop(l_behind_8009_motor);
             DJIMotorStop(l_wheel_motor);
             DJIMotorStop(r_wheel_motor);
+            gyro_z_calib_stage = 0; /* 零力进入沿:重启快采窗口 */
         }
         else
         {
@@ -258,11 +290,47 @@ void ChassisTask()
             DJIMotorEnable(r_wheel_motor);
             /* 急停期间车体可能被挪动,强制下一拍重新锚定/冻结目标 */
             drive_last = 0;
+            /* 使能沿:去零偏 yaw 积分对齐当前 IMU yaw(此时车刚被摆正) */
+            yaw_ctrl = chassis_IMU_data->Yaw * 0.01745329252f;
+            yaw_raw_prev = yaw_ctrl;
         }
         zero_force_last = zero_force;
     }
     if (zero_force)
+    {
+        /* 零力态 = 标定窗口,两段式:
+         * stage1: 前 2000 拍(2s) 固定窗口均值,快速收敛(噪声压 ~√2000 倍),
+         *         恰好用掉上电后电机未使能的空窗;
+         * stage2: 完成后切慢 EMA(τ≈10s) 跟踪温度漂移。
+         * |Gyro[2]|<0.05 rad/s 门限拒绝搬车/晃动污染;stage1 未完成期间
+         * gyro_z_bias 保持旧值,新均值算完才覆盖。 */
+        float gz = chassis_IMU_data->Gyro[2];
+        if (fabsf(gz) < 0.05f)
+        {
+            if (gyro_z_calib_stage == 0)
+            {
+                gyro_z_calib_stage = 1;
+                calib_cnt = 0;
+                calib_acc = 0.0f;
+            }
+            if (gyro_z_calib_stage == 1)
+            {
+                calib_acc += gz;
+                if (++calib_cnt >= 2000u)
+                {
+                    bias_ema = calib_acc / 2000.0f;
+                    gyro_z_bias = bias_ema;
+                    gyro_z_calib_stage = 2;
+                }
+            }
+            else if (gyro_z_calib_stage == 2)
+            {
+                bias_ema += 0.0001f * (gz - bias_ema); /* τ≈10s */
+                gyro_z_bias = bias_ema;
+            }
+        }
         return; /* 停机标志已生效,本拍不再计算控制量 */
+    }
 
     /* 用多圈展开后的连续位置；β 的整圈歧义在 *_Alpha_beta_calculate 里归一化 */
     float r_theta_f=r_front_8009_motor->measure.total_position;
@@ -289,6 +357,16 @@ void ChassisTask()
     r_wheel_control(r_wheel_angle,r_wheel_w,&r_wheel);
     l_wheel_control(l_wheel_angle,l_wheel_w,&l_wheel);
     BalanceObserve(&ten_balance_observe);
+
+    /* 陀螺Z零偏修正(2026-10-31):零力态标定的 gyro_z_bias 从 yaw/dyaw 中扣除。
+     * yaw 用增量积分(带 wrap 处理跨 ±180°),使能沿对齐;dyaw 直接减。 */
+    {
+        float yaw_raw = chassis_IMU_data->Yaw * 0.01745329252f;
+        yaw_ctrl += wrap_pi(yaw_raw - yaw_raw_prev) - gyro_z_bias * 0.001f;
+        yaw_raw_prev = yaw_raw;
+        ten_balance_observe.yaw = yaw_ctrl;
+        ten_balance_observe.dyaw = chassis_IMU_data->Gyro[2] - gyro_z_bias;
+    }
     ChassisDbgLqr(&ten_balance_observe);
 
     /* ===== 遥控目标生成(cmd层意图 → LQR目标) =====
@@ -301,9 +379,10 @@ void ChassisTask()
     if (chassis_cmd_recv.chassis_mode == CHASSIS_STANDING_TEST)
     {
         /* 站立调试基线: 除 yaw 外全零(腿长0.3m已在上方设置)。
-         * yaw_target 不在此置零: 交给下方泄漏跟随逻辑统一管理,
-         * 上电时实测 yaw≈0 与旧硬编码基线等效,且不再硬锁掰剪刀腿。
+         * yaw_target 进入沿锚定当前 yaw 后冻结(上电 yaw≈0,与旧硬编码基线等效)。
          * drive_last 置0,退出本模式后按进入沿重新锚定/冻结。 */
+        if (!standing_last)
+            ten_targets.yaw_target = ten_balance_observe.yaw;
         ten_targets.s_target        = 0.0f;
         ten_targets.ds_target       = 0.0f;
         ten_targets.dyaw_target     = 0.0f;
@@ -313,6 +392,7 @@ void ChassisTask()
         ten_targets.r_dtheta_target = 0.0f;
         ten_targets.phi_target      = 0.0f;
         ten_targets.dphi_target     = 0.0f;
+        ten_targets.yaw_target      = 0.0f;
         drive_last = 0;
     }
     else
@@ -348,17 +428,16 @@ void ChassisTask()
         }
         drive_last = drive;
     } /* end: 非站立测试模式 */
+    standing_last = (chassis_cmd_recv.chassis_mode == CHASSIS_STANDING_TEST);
 
-    /* ===== yaw_target 慢跟随 + 卷绕保护（2026-10-30 剪刀腿根因修复）=====
-     * 实测定位：左右腿摆角差 ≈ 0.6×yaw误差。LQR 以差动 Tp(K=4.25) 扭髋回正 yaw，
-     * 但轮胎搓地摩擦使回正收敛不了，钉死目标 = 持续把两腿掰成剪刀。
-     * yaw 又是纯陀螺积分（无磁力计）会漂移，硬锁旧航向没有意义。
-     * 无偏航输入时 yaw_target 以 ~2s 时间常数向实测 yaw 泄漏：
-     * 短期仍有航向保持，长期不再为回旧航向掰腿。 */
+    /* yaw_target 慢跟随（2026-10-30 零偏对策）：实测车静止时 yaw 仍以 -2.5°/min
+     * 匀速漂移（GyroBias[2]=0，Z 轴零偏不可观测），冻结目标 = 误差匀速增长、
+     * "偏了就修"的循环永不结束。无偏航输入时目标以 τ=30s 向实测 yaw 泄漏：
+     * 残留误差 ≈ 漂移速率×τ ≈ 0.02 rad（剪刀差 ~1°），秒级航向保持不受影响。 */
     if (!drive || fabsf(chassis_cmd_recv.wz) < RC_YAW_ACTIVE_WZ)
         ten_targets.yaw_target += (0.001f / YAW_FOLLOW_TAU)
                                   * (ten_balance_observe.yaw - ten_targets.yaw_target);
-    /* 目标始终与实测 yaw 取同一分支，LQR 的 x[2] 限在 ±π 内，
+    /* yaw_target 卷绕保护：目标始终与实测 yaw 取同一分支，LQR 的 x[2] 限在 ±π 内，
      * 防止 wz 积分目标与 ±180° 卷绕实测值差 2π 时 Tp 猛跳。 */
     float yaw_ref_err = ten_targets.yaw_target - ten_balance_observe.yaw;
     yaw_ref_err -= 2.0f * PI * roundf(yaw_ref_err / (2.0f * PI));
@@ -394,10 +473,25 @@ void ChassisTask()
     VMC_Calc(&four_control_datas, &r_leg_motor_torques, &r_leg);
     l_VMC_Calc(&four_control_datas, &l_leg_motor_torques, &l_leg);
 
+    /* 关节摩擦前馈：VMC 输出的 Tf/Tb 已是电机自身坐标，与 measure.velocity 同系，
+     * 直接同号叠加即可（左右腿各自的坐标约定在 VMC 内部已处理完）。 */
+    float ff_rf = r_joint_fric_t * tanhf(r_front_8009_motor->measure.velocity  / FRICTION_TANH_W0);
+    float ff_rb = r_joint_fric_t * tanhf(r_behind_8009_motor->measure.velocity / FRICTION_TANH_W0);
+    float ff_lf = l_joint_fric_t * tanhf(l_front_8009_motor->measure.velocity  / FRICTION_TANH_W0);
+    float ff_lb = l_joint_fric_t * tanhf(l_behind_8009_motor->measure.velocity / FRICTION_TANH_W0);
+    r_leg_motor_torques.r_Tf += ff_rf;
+    r_leg_motor_torques.r_Tb += ff_rb;
+    l_leg_motor_torques.l_Tf += ff_lf;
+    l_leg_motor_torques.l_Tb += ff_lb;
+
     chassis_dbg.joint_T_cmd[0] = r_leg_motor_torques.r_Tf;
     chassis_dbg.joint_T_cmd[1] = r_leg_motor_torques.r_Tb;
     chassis_dbg.joint_T_cmd[2] = l_leg_motor_torques.l_Tf;
     chassis_dbg.joint_T_cmd[3] = l_leg_motor_torques.l_Tb;
+    chassis_dbg.fric_ff[0] = ff_rf;
+    chassis_dbg.fric_ff[1] = ff_rb;
+    chassis_dbg.fric_ff[2] = ff_lf;
+    chassis_dbg.fric_ff[3] = ff_lb;
 
 
     // DMMotorStop(r_front_8009_motor);
