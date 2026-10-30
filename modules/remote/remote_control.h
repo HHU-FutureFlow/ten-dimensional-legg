@@ -95,10 +95,19 @@ typedef struct
         int16_t rocker_l1; // 左竖直
         int16_t rocker_r_; // 右水平
         int16_t rocker_r1; // 右竖直
-        int16_t dial;      // 侧边拨轮
+        int16_t dial;      // 侧边拨轮(DBUS)/旋钮别名(SBUS)
 
         uint8_t switch_left;  // 左侧开关
         uint8_t switch_right; // 右侧开关
+
+        /* FS-i6X + iA6B (SBUS) 专属通道,按使用文档强制配置表:
+         * CH5/CH6=VrA/VrB 旋钮(无回中), CH7~CH10=SwA/SwB/SwC/SwD 拨杆 */
+        uint8_t switch_a; // CH7  SwA 两档
+        uint8_t switch_b; // CH8  SwB (实机SW2,三档)
+        uint8_t switch_c; // CH9  SwC
+        uint8_t switch_d; // CH10 SwD
+        int16_t knob_a;   // CH5 VrA 旋钮
+        int16_t knob_b;   // CH6 VrB 旋钮
     } rc;
     struct
     {

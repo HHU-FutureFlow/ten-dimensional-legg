@@ -23,6 +23,13 @@ static DJIMotorInstance *l_wheel_motor, *r_wheel_motor;
 static PIDInstance l_theta_pid;
 static PIDInstance r_theta_pid;
 
+/* cmd层指令订阅: chassis_cmd 话题,robot_cmd 200Hz发布 */
+static Subscriber_t *chassis_cmd_sub;
+static Chassis_Ctrl_Cmd_s chassis_cmd_recv;
+#define RC_DRIVE_ACTIVE_VX 0.02f /* m/s, |vx|低于此视为松杆→定点 */
+#define RC_YAW_ACTIVE_WZ   0.05f /* rad/s, |wz|低于此视为无偏航输入 */
+#define YAW_FOLLOW_TAU     2.0f  /* s, 无偏航输入时 yaw_target 向实测 yaw 泄漏的时间常数 */
+
 /* 腿长速度估计状态（P-P 级联的阻尼项用） */
 typedef struct
 {
@@ -126,6 +133,8 @@ void ChassisInit()
 {
     chassis_IMU_data = INS_Init();
 
+    chassis_cmd_sub = SubRegister("chassis_cmd", sizeof(Chassis_Ctrl_Cmd_s));
+
     Motor_Init_Config_s r_config = {
         .can_init_config = {
             .can_handle = &hcan1,            
@@ -221,6 +230,40 @@ void ChassisTask()
     /* 使能帧只在 DMMotorInit/DMMotorEnable 里发一次。原来在这里每 5ms 发两帧
      * DM_CMD_MOTOR_MODE，既占 CAN 带宽又打断 MIT 帧时序，已移除。 */
     SetPowerLimit(1000000.0f);   /* @Todo 接裁判系统后换成真实底盘功率 */
+
+    /* ===== 接收 cmd 层指令 + 零力急停路径 =====
+     * 边沿触发: Stop/Enable 只置标志,电机输出任务持续按标志发零/正常帧。 */
+    SubGetMessage(chassis_cmd_sub, (void *)&chassis_cmd_recv);
+    static uint8_t zero_force_last = 0;
+    static uint8_t drive_last = 0; /* 行驶模式锁存,零力恢复时置0强制重新锚定 */
+    uint8_t zero_force = (chassis_cmd_recv.chassis_mode == CHASSIS_ZERO_FORCE);
+    if (zero_force != zero_force_last)
+    {
+        if (zero_force)
+        {
+            DMMotorStop(r_front_8009_motor);
+            DMMotorStop(r_behind_8009_motor);
+            DMMotorStop(l_front_8009_motor);
+            DMMotorStop(l_behind_8009_motor);
+            DJIMotorStop(l_wheel_motor);
+            DJIMotorStop(r_wheel_motor);
+        }
+        else
+        {
+            DMMotorEnable(r_front_8009_motor);
+            DMMotorEnable(r_behind_8009_motor);
+            DMMotorEnable(l_front_8009_motor);
+            DMMotorEnable(l_behind_8009_motor);
+            DJIMotorEnable(l_wheel_motor);
+            DJIMotorEnable(r_wheel_motor);
+            /* 急停期间车体可能被挪动,强制下一拍重新锚定/冻结目标 */
+            drive_last = 0;
+        }
+        zero_force_last = zero_force;
+    }
+    if (zero_force)
+        return; /* 停机标志已生效,本拍不再计算控制量 */
+
     /* 用多圈展开后的连续位置；β 的整圈歧义在 *_Alpha_beta_calculate 里归一化 */
     float r_theta_f=r_front_8009_motor->measure.total_position;
     float r_theta_b=r_behind_8009_motor->measure.total_position;
@@ -237,18 +280,7 @@ void ChassisTask()
     float l_wheel_angle= -l_wheel_motor->measure.total_angle;
     float l_wheel_w= -l_wheel_motor->measure.speed_aps;
 
-    ten_targets.s_target=0.0f;
-    ten_targets.ds_target=0.0f;
-    ten_targets.yaw_target=0.0f;
-    ten_targets.dyaw_target=0.0f;
-    ten_targets.l_theta_target=0.000f;
-    ten_targets.l_dtheta_target=0;
-    ten_targets.r_theta_target=0.000f;
-    ten_targets.r_dtheta_target=0;
-   
-    ten_targets.phi_target=0;
-    ten_targets.dphi_target=0;
-
+    /* 腿长目标保持站立调试基线;行驶目标在 BalanceObserve 之后生成 */
     ten_targets.l_leg_length_target = 0.3f;
     ten_targets.r_leg_length_target = 0.3f;
 
@@ -258,6 +290,80 @@ void ChassisTask()
     l_wheel_control(l_wheel_angle,l_wheel_w,&l_wheel);
     BalanceObserve(&ten_balance_observe);
     ChassisDbgLqr(&ten_balance_observe);
+
+    /* ===== 遥控目标生成(cmd层意图 → LQR目标) =====
+     * 行驶(CHASSIS_WHEELLEG_DRIVE): vx>阈值→控速(s_target跟随s), 松杆→定点(s_target冻结);
+     *                               wz 积分为 yaw_target,松杆冻结→航向锁定。
+     * 锁定(CHASSIS_NO_FOLLOW等): 进入瞬间冻结当前 s/yaw 为目标 → 原地定住。
+     * 上电首拍锁定即冻结,此时 s≈0,yaw≈0,与站立调试的硬编码基线等价。 */
+    /* drive 在函数级作用域: 末尾的 yaw 泄漏跟随逻辑需要引用 */
+    uint8_t drive = (chassis_cmd_recv.chassis_mode == CHASSIS_WHEELLEG_DRIVE);
+    if (chassis_cmd_recv.chassis_mode == CHASSIS_STANDING_TEST)
+    {
+        /* 站立调试基线: 除 yaw 外全零(腿长0.3m已在上方设置)。
+         * yaw_target 不在此置零: 交给下方泄漏跟随逻辑统一管理,
+         * 上电时实测 yaw≈0 与旧硬编码基线等效,且不再硬锁掰剪刀腿。
+         * drive_last 置0,退出本模式后按进入沿重新锚定/冻结。 */
+        ten_targets.s_target        = 0.0f;
+        ten_targets.ds_target       = 0.0f;
+        ten_targets.dyaw_target     = 0.0f;
+        ten_targets.l_theta_target  = 0.0f;
+        ten_targets.l_dtheta_target = 0.0f;
+        ten_targets.r_theta_target  = 0.0f;
+        ten_targets.r_dtheta_target = 0.0f;
+        ten_targets.phi_target      = 0.0f;
+        ten_targets.dphi_target     = 0.0f;
+        drive_last = 0;
+    }
+    else
+    {
+    if (drive && !drive_last) /* 行驶进入沿(含急停恢复后): 目标锚定当前位姿 */
+    {
+        ten_targets.s_target   = ten_balance_observe.s;
+        ten_targets.yaw_target = ten_balance_observe.yaw;
+    }
+    if (drive)
+    {
+        if (fabsf(chassis_cmd_recv.vx) > RC_DRIVE_ACTIVE_VX)
+        {
+            ten_targets.ds_target = chassis_cmd_recv.vx;
+            ten_targets.s_target  = ten_balance_observe.s;
+        }
+        else
+        {
+            ten_targets.ds_target = 0.0f;
+        }
+        ten_targets.yaw_target += chassis_cmd_recv.wz * 0.001f; /* ChassisTask 1kHz */
+        ten_targets.dyaw_target = 0.0f;
+    }
+        else
+        {
+            ten_targets.ds_target = 0.0f;
+            ten_targets.dyaw_target = 0.0f;
+            if (!drive_last) /* 锁定进入沿: 冻结当前位姿为目标 */
+            {
+                ten_targets.s_target   = ten_balance_observe.s;
+                ten_targets.yaw_target = ten_balance_observe.yaw;
+            }
+        }
+        drive_last = drive;
+    } /* end: 非站立测试模式 */
+
+    /* ===== yaw_target 慢跟随 + 卷绕保护（2026-10-30 剪刀腿根因修复）=====
+     * 实测定位：左右腿摆角差 ≈ 0.6×yaw误差。LQR 以差动 Tp(K=4.25) 扭髋回正 yaw，
+     * 但轮胎搓地摩擦使回正收敛不了，钉死目标 = 持续把两腿掰成剪刀。
+     * yaw 又是纯陀螺积分（无磁力计）会漂移，硬锁旧航向没有意义。
+     * 无偏航输入时 yaw_target 以 ~2s 时间常数向实测 yaw 泄漏：
+     * 短期仍有航向保持，长期不再为回旧航向掰腿。 */
+    if (!drive || fabsf(chassis_cmd_recv.wz) < RC_YAW_ACTIVE_WZ)
+        ten_targets.yaw_target += (0.001f / YAW_FOLLOW_TAU)
+                                  * (ten_balance_observe.yaw - ten_targets.yaw_target);
+    /* 目标始终与实测 yaw 取同一分支，LQR 的 x[2] 限在 ±π 内，
+     * 防止 wz 积分目标与 ±180° 卷绕实测值差 2π 时 Tp 猛跳。 */
+    float yaw_ref_err = ten_targets.yaw_target - ten_balance_observe.yaw;
+    yaw_ref_err -= 2.0f * PI * roundf(yaw_ref_err / (2.0f * PI));
+    ten_targets.yaw_target = ten_balance_observe.yaw + yaw_ref_err;
+
     LQR_calc(&ten_balance_observe,&ten_targets,&four_control_datas);
     chassis_dbg.lqr_u[0] = four_control_datas.l_Tw;
     chassis_dbg.lqr_u[1] = four_control_datas.r_Tw;

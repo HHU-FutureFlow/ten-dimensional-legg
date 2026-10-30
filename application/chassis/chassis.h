@@ -33,9 +33,12 @@ extern volatile float l_wheel_direction;
  * 否则 3318.833*8 = 26550 会溢出成负数、电流乱跳。 */
 #define WHEEL_T_MAX       (4.90f)
 
-/* 每条腿的重力前馈：(m_body + m_leg) / 2 * g ≈ 29 N。
+/* 每条腿的重力前馈（2026-10-30 ep 实测修正）：
+ * 站立稳态 Fleg_cmd ≈ 45~57 N/腿 → 整车 ≈ 10 kg，每腿承重 ≈ 50 N。
+ * 旧值 29 N（按 ~6 kg 估）偏小，P 环把缺的 ~20 N 顶成 ~3 cm 稳态缩短
+ * （实测两腿稳在 0.27 m 而非目标 0.30，偏离 LQR 设计工作点）。
  * 与腿长 PID 输出相加后作为 VMC 的虚拟腿长力 F。 */
-#define LEG_GRAVITY_FF    (29.0f)
+#define LEG_GRAVITY_FF    (50.0f)
 
 /* 腿长 P-P 级联（手册 §8.1）：F = FF + Kp*(Ldes-L) - Kv*Ldot
  * Kp_pos: 位置刚度 N/m；Kv_vel: 轴向阻尼 N/(m/s)。
