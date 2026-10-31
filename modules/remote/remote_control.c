@@ -83,17 +83,18 @@ static void sbus_to_rc(const uint8_t *b)
     rc_ctrl[TEMP].rc.rocker_l1 = SbusAxis(b, 3);   /* CH4 (FlySky美国手: 左杆水平,台架确认) */
     /* 以下通道分配严格按《FS-i6x搭配iA6B接收端使用文档》强制配置表,
      * 遥控器端: 辅助通道 VrA/VrB/SwA/SwB/SwC/SwD → CH5~CH10 */
-    rc_ctrl[TEMP].rc.knob_a   = SbusAxis(b, 4);            /* CH5 VrA 旋钮 */
-    rc_ctrl[TEMP].rc.knob_b   = SbusAxis(b, 5);            /* CH6 VrB 旋钮 */
-    rc_ctrl[TEMP].rc.switch_a = SbusSwitch(SbusAxis(b, 6)); /* CH7 SwA 两档: 急停开关 */
-    rc_ctrl[TEMP].rc.switch_b = SbusSwitch(SbusAxis(b, 7)); /* CH8 SwB 三档(实机SW2): 模式开关 */
-    rc_ctrl[TEMP].rc.switch_c = SbusSwitch(SbusAxis(b, 8)); /* CH9 SwC */
-    rc_ctrl[TEMP].rc.switch_d = SbusSwitch(SbusAxis(b, 9)); /* CH10 SwD */
+    rc_ctrl[TEMP].rc.knob_a   = SbusAxis(b, 4);            /* CH5 VrA 旋钮(外壳标4) */
+    rc_ctrl[TEMP].rc.knob_b   = SbusAxis(b, 5);            /* CH6 VrB 旋钮(外壳标5) */
+    /* 外壳丝印 SW0~SW3 从左到右,按文档图示通道序号续排: SW0=CH7(SwA) ... SW3=CH10(SwD) */
+    rc_ctrl[TEMP].rc.switch_a = SbusSwitch(SbusAxis(b, 6)); /* CH7 SwA =外壳SW0(最左,两档): 急停开关 */
+    rc_ctrl[TEMP].rc.switch_b = SbusSwitch(SbusAxis(b, 7)); /* CH8 SwB =外壳SW1 */
+    rc_ctrl[TEMP].rc.switch_c = SbusSwitch(SbusAxis(b, 8)); /* CH9 SwC =外壳SW2(三档): 模式开关 */
+    rc_ctrl[TEMP].rc.switch_d = SbusSwitch(SbusAxis(b, 9)); /* CH10 SwD=外壳SW3 */
     /* 语义别名,robot_cmd 按语义取用:
-     * switch_left  = 模式开关(三档SW2): 下=遥控行驶 中/上=站立锁定
-     * switch_right = 急停开关(两档SwA): 上=运行 下=零力急停
+     * switch_left  = 模式开关(三档SW2/CH9): 下=遥控行驶 中/上=站立锁定
+     * switch_right = 急停开关(两档SW0/CH7): 上=运行 下=零力急停
      * dial         = VrA 旋钮,本版不接功能 */
-    rc_ctrl[TEMP].rc.switch_left  = rc_ctrl[TEMP].rc.switch_b;
+    rc_ctrl[TEMP].rc.switch_left  = rc_ctrl[TEMP].rc.switch_c;
     rc_ctrl[TEMP].rc.switch_right = rc_ctrl[TEMP].rc.switch_a;
     rc_ctrl[TEMP].rc.dial         = rc_ctrl[TEMP].rc.knob_a;
     memcpy(&rc_ctrl[LAST], &rc_ctrl[TEMP], sizeof(RC_ctrl_t));

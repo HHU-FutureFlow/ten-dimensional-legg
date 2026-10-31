@@ -91,21 +91,21 @@ typedef struct
 {
     struct
     {
-        int16_t rocker_l_; // 左水平
-        int16_t rocker_l1; // 左竖直
+        int16_t rocker_l_; // 左水平(DBUS) / SBUS实际=左杆竖直CH3(文档图示)
+        int16_t rocker_l1; // 左竖直(DBUS) / SBUS实际=左杆水平CH4(文档图示)
         int16_t rocker_r_; // 右水平
         int16_t rocker_r1; // 右竖直
         int16_t dial;      // 侧边拨轮(DBUS)/旋钮别名(SBUS)
 
-        uint8_t switch_left;  // 左侧开关
-        uint8_t switch_right; // 右侧开关
+        uint8_t switch_left;  // 左侧开关(DBUS) / SBUS=模式开关SW2三档(CH9)
+        uint8_t switch_right; // 右侧开关(DBUS) / SBUS=急停开关SW0两档(CH7)
 
-        /* FS-i6X + iA6B (SBUS) 专属通道,按使用文档强制配置表:
+        /* FS-i6X + iA6B (SBUS) 专属通道,按使用文档强制配置表+外壳丝印SW0~SW3:
          * CH5/CH6=VrA/VrB 旋钮(无回中), CH7~CH10=SwA/SwB/SwC/SwD 拨杆 */
-        uint8_t switch_a; // CH7  SwA 两档
-        uint8_t switch_b; // CH8  SwB (实机SW2,三档)
-        uint8_t switch_c; // CH9  SwC
-        uint8_t switch_d; // CH10 SwD
+        uint8_t switch_a; // CH7  SwA =外壳SW0(最左,两档)
+        uint8_t switch_b; // CH8  SwB =外壳SW1
+        uint8_t switch_c; // CH9  SwC =外壳SW2(三档)
+        uint8_t switch_d; // CH10 SwD =外壳SW3
         int16_t knob_a;   // CH5 VrA 旋钮
         int16_t knob_b;   // CH6 VrB 旋钮
     } rc;
