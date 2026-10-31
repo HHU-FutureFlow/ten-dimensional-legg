@@ -168,7 +168,7 @@ static void RemoteControlSet()
     /* ---- 轮腿行驶参数 ---- */
 #define RC_STICK_DEADBAND 20.0f  /* 摇杆死区,±660归一化计数 */
 #define WHEELLEG_VX_MAX   1.0f   /* 满杆前进速度 m/s,首次实车勿超1.5 */
-#define WHEELLEG_WZ_MAX   2.0f   /* 满杆转向角速度 rad/s */
+#define WHEELLEG_WZ_MAX   2.0f   /* 满杆转向角速度 rad/s,wz>0=左转=LQR yaw正方向 */
 #define RC_CMD_LPF_ALPHA  0.15f  /* 指令一阶低通系数(200Hz,τ≈25ms) */
 
     static float vx_cmd_lpf = 0.0f;
@@ -191,9 +191,11 @@ static void RemoteControlSet()
     else if (stick_forward < -RC_STICK_DEADBAND)
         vx_cmd = (stick_forward + RC_STICK_DEADBAND) / (660.0f - RC_STICK_DEADBAND) * WHEELLEG_VX_MAX;
     if (stick_turn > RC_STICK_DEADBAND)
-        wz_cmd = (stick_turn - RC_STICK_DEADBAND) / (660.0f - RC_STICK_DEADBAND) * WHEELLEG_WZ_MAX;
+        wz_cmd = -(stick_turn - RC_STICK_DEADBAND) / (660.0f - RC_STICK_DEADBAND) * WHEELLEG_WZ_MAX;
     else if (stick_turn < -RC_STICK_DEADBAND)
-        wz_cmd = (stick_turn + RC_STICK_DEADBAND) / (660.0f - RC_STICK_DEADBAND) * WHEELLEG_WZ_MAX;
+        wz_cmd = -(stick_turn + RC_STICK_DEADBAND) / (660.0f - RC_STICK_DEADBAND) * WHEELLEG_WZ_MAX;
+    /* 转向取反的原因: 摇杆左推解析为负值(FlySky/DT7 同为右推=+),
+     * 而 LQR 约定 yaw 左转为正(LQR.c 列序注释),取反后左推=wz>0=左转。 */
 
     /* 一阶低通,柔化推杆冲击 */
     vx_cmd_lpf += RC_CMD_LPF_ALPHA * (vx_cmd - vx_cmd_lpf);
