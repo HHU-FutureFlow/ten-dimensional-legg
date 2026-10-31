@@ -49,7 +49,7 @@ static Chassis_Ctrl_Cmd_s chassis_cmd_recv;
  * 左腿 0.5 起调（手测静摩擦大），右腿先 0（过补会变负阻尼、诱发极限环）。
  * 判据：左右腿手掰阻力对称；注意 ω=0 时补偿为 0，静止突破仍靠平衡自振。 */
 volatile float l_joint_fric_t = 1.0f;   /* N·m/关节, 左腿 */
-volatile float r_joint_fric_t = 0.1f;   /* N·m/关节, 右腿 */
+volatile float r_joint_fric_t = 0.15f;   /* N·m/关节, 右腿 */
 #define FRICTION_TANH_W0  (0.15f)       /* rad/s, tanh 速度平滑尺度 */
 
 /* 腿长速度估计状态（P-P 级联的阻尼项用） */
@@ -331,7 +331,8 @@ void ChassisTask()
     if (chassis_cmd_recv.chassis_mode == CHASSIS_STANDING_TEST)
     {
         /* 站立调试基线: 除 yaw 外全零(腿长0.3m已在上方设置)。
-         * yaw_target 进入沿锚定当前 yaw 后冻结(上电 yaw≈0,与旧硬编码基线等效)。
+         * yaw_target 进入沿锚定当前 ψ 后冻结——里程计 ψ 会随推车/弧线漂移累计
+         * 差动轮里程,若硬编码 0 会产生常值 yaw 误差 → 常值差动 Tp → 单腿被压死。
          * drive_last 置0,退出本模式后按进入沿重新锚定/冻结。 */
         if (!standing_last)
             ten_targets.yaw_target = ten_balance_observe.yaw;
@@ -344,7 +345,6 @@ void ChassisTask()
         ten_targets.r_dtheta_target = 0.0f;
         ten_targets.phi_target      = 0.0f;
         ten_targets.dphi_target     = 0.0f;
-        ten_targets.yaw_target      = 0.0f;
         drive_last = 0;
     }
     else
