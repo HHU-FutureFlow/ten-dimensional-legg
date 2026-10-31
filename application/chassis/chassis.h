@@ -84,6 +84,7 @@ typedef struct
     float Ldot[2];        /* [0]左 [1]右，腿长速度估计（m/s），低通后 */
     float joint_T_cmd[4];
     float fric_ff[4];     /* [0]r_f [1]r_b [2]l_f [3]l_b，本拍实际叠加的关节摩擦前馈(N·m) */
+    float wheel_ff[2];    /* [0]左轮 [1]右轮，本拍实际叠加的轮端摩擦前馈(N·m) */
     float Tw_cmd[2];
     float Roll;           /* IMU roll，度，调试 roll 补偿用 */
     float dFroll;         /* roll 补偿力差 ΔF（N），右腿为正 */

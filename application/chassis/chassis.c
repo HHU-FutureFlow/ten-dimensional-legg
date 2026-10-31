@@ -52,6 +52,17 @@ volatile float l_joint_fric_t = 1.0f;   /* N·m/关节, 左腿 */
 volatile float r_joint_fric_t = 0.15f;   /* N·m/关节, 右腿 */
 #define FRICTION_TANH_W0  (0.15f)       /* rad/s, tanh 速度平滑尺度 */
 
+/* ===== 轮端库仑摩擦前馈（2026-10-31）=====
+ * 手感实测右轮毂电机阻尼大于左轮（自改减速箱装配差异），轮端摩擦同样吃掉
+ * 平衡环的小 Tw 修正与推车时的滚动 -> 单腿摆动不对称的轮端成因。
+ * 补偿按"前进为正"的轮速（r_wheel.r_dx / l_wheel.l_dx，m/s，左轮符号已翻正）
+ * 加在 Tw 上、限幅之前；左轮 l_wheel_direction=-1 的坐标换算在其后，随之落位。
+ * T_c volatile 在线调：右 0.10 / 左 0.05 起调（右轮阻尼大故给多），
+ * 过大 = 轮速通道负阻尼 -> 平衡低频抖动，出现即减半。tanh(0)=0 静止无自发力。 */
+volatile float r_wheel_fric_t = 0.10f;  /* N·m/轮, 右轮 */
+volatile float l_wheel_fric_t = 0.05f;  /* N·m/轮, 左轮 */
+#define WHEEL_FRICTION_TANH_V0 (0.03f)  /* m/s, tanh 速度平滑尺度(轮缘线速度) */
+
 /* 腿长速度估计状态（P-P 级联的阻尼项用） */
 typedef struct
 {
@@ -463,13 +474,20 @@ void ChassisTask()
 
     /* 轮力矩下发：先按 3508 的真实上限钳位，再换算成电流码。
      * 限幅必须放在换算之前 —— 见 chassis.h 里 WHEEL_T_MAX 的注释。 */
-    float r_Tw = four_control_datas.r_Tw;
-    float l_Tw = four_control_datas.l_Tw;
+    /* 轮端摩擦前馈：r_dx/l_dx 已是前进为正的轮缘线速度(m/s)，直接取符号；
+     * 左轮 l_wheel_direction=-1 的换算在 DMMotorSetRef 处，FF 加在换算前随之落位。 */
+    float ff_rw = r_wheel_fric_t * tanhf(r_wheel.r_dx / WHEEL_FRICTION_TANH_V0);
+    float ff_lw = l_wheel_fric_t * tanhf(l_wheel.l_dx / WHEEL_FRICTION_TANH_V0);
+
+    float r_Tw = four_control_datas.r_Tw + ff_rw;
+    float l_Tw = four_control_datas.l_Tw + ff_lw;
     LIMIT_MIN_MAX(r_Tw, -WHEEL_T_MAX, WHEEL_T_MAX);
     LIMIT_MIN_MAX(l_Tw, -WHEEL_T_MAX, WHEEL_T_MAX);
 
     chassis_dbg.Tw_cmd[0] = l_Tw;
     chassis_dbg.Tw_cmd[1] = r_Tw;
+    chassis_dbg.wheel_ff[0] = ff_lw;
+    chassis_dbg.wheel_ff[1] = ff_rw;
 
     DJIMotorSetRef(r_wheel_motor, WHEEL_T_PER_RAW * r_Tw);
     DJIMotorSetRef(l_wheel_motor, l_wheel_direction * WHEEL_T_PER_RAW * l_Tw);
