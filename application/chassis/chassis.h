@@ -23,16 +23,46 @@ extern volatile float l_front_zero, l_behind_zero;
 /* +1/-1 converts raw left wheel direction to forward; confirm on hardware. */
 extern volatile float l_wheel_direction;
 
+/* 轮力矩 -> C620 电流码 的换算系数。
+ * 由实测反推：819.2(码/A) / kt_out，kt_out = 0.0156(转子) * 15.8(自改减速箱) = 0.2469 N·m/A
+ * 注意这是"输出端力矩"，不是电流。 */
+#define WHEEL_T_PER_RAW   (3318.833f)
+/* 3508 + C620 的电流码上限是 ±16384(=±20A)，换算回来就是 ±4.94 N·m。
+ * dji_motor.c 里 LIMIT_MIN_MAX(set,-16384,16384) 只对 GM6020 生效，
+ * M3508 是直接 (int16_t) 强转、没有限幅，所以必须在这里先钳住，
+ * 否则 3318.833*8 = 26550 会溢出成负数、电流乱跳。 */
+#define WHEEL_T_MAX       (4.90f)
+
+/* 每条腿的重力前馈：(m_body + m_leg) / 2 * g ≈ 29 N。
+ * 与腿长 PID 输出相加后作为 VMC 的虚拟腿长力 F。 */
+#define LEG_GRAVITY_FF    (29.0f)
+
 /* 电机反馈量调试映射:在 Ozone/VarScope 全局符号里搜 chassis_dbg 即可
  * leg_*  : [0]r_front [1]r_behind [2]l_front [3]l_behind
  * wheel_*: [0]l_wheel [1]r_wheel
- * 位置单位 rad,速度单位 rad/s,符号与 ChassisTask 内的控制量一致 */
+ * 位置单位 rad,速度单位 rad/s,符号与 ChassisTask 内的控制量一致
+ *
+ * lqr_x[] 是喂进 LQR 的 10 个状态（单位: m, m/s, rad, rad/s），
+ * lqr_u[]     : [0]l_Tw [1]r_Tw [2]l_Tp [3]r_Tp，LQR 输出（N·m）
+ * Fleg_cmd[]  : [0]左腿 [1]右腿，重力前馈+PID 后的虚拟腿长力（N）
+ * joint_T_cmd : [0]r_front [1]r_behind [2]l_front [3]l_behind，实际关节力矩指令（N·m）
+ * Tw_cmd[]    : [0]左轮 [1]右轮，限幅后真正下发的轮力矩（N·m）
+ * 排查"往一个方向跑不停"时看这三个：
+ *   phi 变负 + Tw 变正            -> 俯仰环方向对
+ *   车体回正了但 Tw 不换号        -> s/ds 环没起作用
+ *   Tw 在 ±4.9 之间几毫秒来回跳   -> 延迟振荡（控制频率不够） */
 typedef struct
 {
     float leg_pos[4];
     float leg_vel[4];
     float wheel_pos[2];
     float wheel_vel[2];
+
+    float lqr_x[10];
+    float lqr_u[4];
+    float Fleg_cmd[2];
+    float joint_T_cmd[4];
+    float Tw_cmd[2];
 } Chassis_Dbg_s;
 extern volatile Chassis_Dbg_s chassis_dbg;
 

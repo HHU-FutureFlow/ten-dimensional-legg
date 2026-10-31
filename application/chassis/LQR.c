@@ -1,65 +1,50 @@
 #include "LQR.h"
 
-
-
-
-/* 列序: s | ds | yaw | dyaw | lθ | ldθ | rθ | rdθ | φ | dφ
+/* 完整 10 维 LQR，工作点 l=0.30 m，控制周期 1 ms。
+ * 由 lqr_v2/run_all.py 生成，坐标、输入符号与固件一致，不要再翻转任何列。
+ *
+ * 列序: s | ds | yaw | dyaw | lθ | ldθ | rθ | rdθ | φ | dφ
  * 行序: [0]=l_Tw(左轮) [1]=r_Tw(右轮) [2]=l_Tp(左腿) [3]=r_Tp(右腿)
- * 板凳模型: 保留轮子两行, 腿部两行清零 */
+ * 控制律: T = -K(x-x_ref)，对应下方 control_datas = -u。
+ *
+ * s/ds：车前进为正；yaw/dyaw：左转为正。
+ * θ/dθ：轮心在髋前为正；φ/dφ：车头上抬为正，即 -Pitch/-Gyro[0]。
+ * Tw>0：轮子前滚；Tp>0：轮子相对机体向前摆。
+ */
 float K[4][10] =
 {
-    {   4.042174f,  20.240416f, -137.789048f,  -6.202160f, -16.701273f, -0.877369f,  -5.017493f, -0.017654f,  +44.356862f,  +6.399397f },
-    {   2.802098f,  27.349857f,  103.030310f,   3.852446f,  -5.513473f, -0.095412f, -21.040766f, -0.783158f,  +51.320052f,  +6.305144f },
-    {   0.0f,        0.0f,         0.0f,        0.0f,       0.0f,       0.0f,       0.0f,       0.0f,        0.0f,        0.0f        },
-    {   0.0f,        0.0f,         0.0f,        0.0f,       0.0f,       0.0f,       0.0f,       0.0f,        0.0f,        0.0f        }
+    {   -1.688633f,   -1.973978f,   -0.804423f,   -0.359825f,   +5.452686f,   +0.971232f,   +2.628934f,   +0.491476f,   +1.473152f,   +0.252954f },
+    {   -1.688633f,   -1.973978f,   +0.804423f,   +0.359825f,   +2.628934f,   +0.491476f,   +5.452686f,   +0.971232f,   +1.473152f,   +0.252954f },
+    {   -1.698882f,   -1.795105f,   +4.623380f,   +1.902628f,   +8.526657f,   +1.020029f,   -3.080438f,   -0.018919f,  -21.995711f,   -1.338773f },
+    {   -1.698882f,   -1.795105f,   -4.623380f,   -1.902628f,   -3.080438f,   -0.018919f,   +8.526657f,   +1.020029f,  -21.995711f,   -1.338773f }
 };
 
+float rate = 1.0f;
 
-// float K[4][10] =
-// {
-//     {  4.042174f,  20.240416f, -137.789048f, -6.202160f, -16.701273f, -0.877369f,  -5.017493f, -0.017654f,  -44.356862f,  -6.399397f },
-//     {  2.802098f,  27.349857f,  103.030310f,  3.852446f,  -5.513473f, -0.095412f, -21.040766f, -0.783158f,  -51.320052f,  -6.305144f },
-//     {  3.555269f, -35.952177f, -929.901337f, -29.292768f, 133.423882f,  5.064401f, -29.160967f, -0.818225f,  -94.202648f, -33.618322f },
-//     { -19.424088f, -17.610095f, 1055.445938f, 32.794986f, -42.803231f, -1.247324f, 109.567419f,  3.972082f, -145.568572f, -42.591322f }
-// };
-float rate = 0.1;
-float x[10];
-float u[4];
-
-void LQR_calc(ten_balance_observation *observe,ten_balance_target *balance_targets,four_control_data *control_datas)
+void LQR_calc(ten_balance_observation *observe, ten_balance_target *balance_targets, four_control_data *control_datas)
 {
     float x[10];
-    float u[4];
+    float u[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
-    x[0]=observe->s-balance_targets->s_target;
-    x[1]=observe->ds-balance_targets->ds_target;
-    x[2]=observe->yaw-balance_targets->yaw_target;
-    x[3]=observe->dyaw-balance_targets->dyaw_target;
-    x[4]=observe->l_theta-balance_targets->l_theta_target;
-    x[5]=observe->l_dtheta-balance_targets->l_dtheta_target;
-    x[6]=observe->r_theta-balance_targets->r_theta_target;
-    x[7]=observe->r_dtheta-balance_targets->r_dtheta_target;
-    x[8]=observe->phi-balance_targets->phi_target;
-    x[9]=observe->dphi-balance_targets->dphi_target;
+    x[0] = observe->s - balance_targets->s_target;
+    x[1] = observe->ds - balance_targets->ds_target;
+    x[2] = observe->yaw - balance_targets->yaw_target;
+    x[3] = observe->dyaw - balance_targets->dyaw_target;
+    x[4] = observe->l_theta - balance_targets->l_theta_target;
+    x[5] = observe->l_dtheta - balance_targets->l_dtheta_target;
+    x[6] = observe->r_theta - balance_targets->r_theta_target;
+    x[7] = observe->r_dtheta - balance_targets->r_dtheta_target;
+    x[8] = observe->phi - balance_targets->phi_target;
+    x[9] = observe->dphi - balance_targets->dphi_target;
 
-
-
-
-    for (int i = 0; i < 4; i++) {
-        u[i] = 0.0;
-        for (int j = 0; j < 10; j++) {
+    for (int i = 0; i < 4; i++)
+    {
+        for (int j = 0; j < 10; j++)
             u[i] += rate * K[i][j] * x[j];
-        }
     }
 
-    control_datas->l_Tw=-u[0];
-    control_datas->r_Tw=-u[1];
-    control_datas->l_Tp=-u[2];
-    control_datas->r_Tp=-u[3];
-
-
+    control_datas->l_Tw = -u[0];
+    control_datas->r_Tw = -u[1];
+    control_datas->l_Tp = -u[2];
+    control_datas->r_Tp = -u[3];
 }
-
-
-
-

@@ -17,17 +17,23 @@
 
 #include "bsp_log.h"
 
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
+#include "chassis.h"
+#endif
+
 osThreadId insTaskHandle;
 osThreadId robotTaskHandle;
 osThreadId motorTaskHandle;
 osThreadId daemonTaskHandle;
 osThreadId uiTaskHandle;
+osThreadId chassisTaskHandle;
 
 void StartINSTASK(void const *argument);
 void StartMOTORTASK(void const *argument);
 void StartDAEMONTASK(void const *argument);
 void StartROBOTTASK(void const *argument);
 void StartUITASK(void const *argument);
+void StartCHASSISTASK(void const *argument);
 
 /**
  * @brief 初始化机器人任务,所有持续运行的任务都在这里初始化
@@ -47,6 +53,14 @@ void OSTaskInit()
 
     osThreadDef(robottask, StartROBOTTASK, osPriorityNormal, 0, 1024);
     robotTaskHandle = osThreadCreate(osThread(robottask), NULL);
+
+    /* 平衡底盘必须 1 kHz：LQR 的延迟裕度和控制周期强相关。
+     * 200 Hz(5ms) 下额外链路延迟只要 2ms 就发散，1 kHz 能容忍 8ms。
+     * 详见 lqr_sim/delay_check.py 与 README.md。 */
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
+    osThreadDef(chassistask, StartCHASSISTASK, osPriorityAboveNormal, 0, 1024);
+    chassisTaskHandle = osThreadCreate(osThread(chassistask), NULL);
+#endif
 
     osThreadDef(uitask, StartUITASK, osPriorityNormal, 0, 512);
     uiTaskHandle = osThreadCreate(osThread(uitask), NULL);
@@ -124,6 +138,28 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
         osDelay(5);
     }
 }
+
+/* 平衡底盘专用:1 kHz 跑 ChassisTask
+ * 为什么单独开一个任务而不是把 RobotTask 提到 1kHz:
+ *   RobotTask 里还有 GimbalTask/ShootTask/RobotCMDTask,一起提速会白吃 CPU 和抖动;
+ *   只有平衡环对延迟敏感,所以只把这一个摘出来。 */
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
+__attribute__((noreturn)) void StartCHASSISTASK(void const *argument)
+{
+    static float chassis_dt;
+    static float chassis_start;
+    LOGINFO("[freeRTOS] CHASSIS Task Start (1kHz)");
+    for (;;)
+    {
+        chassis_start = DWT_GetTimeline_ms();
+        ChassisTask();
+        chassis_dt = DWT_GetTimeline_ms() - chassis_start;
+        if (chassis_dt > 1)
+            LOGERROR("[freeRTOS] CHASSIS Task is being DELAY! dt = [%f]", &chassis_dt);
+        osDelay(1);
+    }
+}
+#endif
 
 __attribute__((noreturn)) void StartUITASK(void const *argument)
 {
