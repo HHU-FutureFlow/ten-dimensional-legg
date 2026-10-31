@@ -33,9 +33,29 @@ extern volatile float l_wheel_direction;
  * 否则 3318.833*8 = 26550 会溢出成负数、电流乱跳。 */
 #define WHEEL_T_MAX       (4.90f)
 
-/* 每条腿的重力前馈：(m_body + m_leg) / 2 * g ≈ 29 N。
+/* 每条腿的重力前馈（2026-10-30 ep 实测修正）：
+ * 站立稳态 Fleg_cmd ≈ 45~57 N/腿 → 整车 ≈ 10 kg，每腿承重 ≈ 50 N。
+ * 旧值 29 N（按 ~6 kg 估）偏小，P 环把缺的 ~20 N 顶成 ~3 cm 稳态缩短
+ * （实测两腿稳在 0.27 m 而非目标 0.30，偏离 LQR 设计工作点）。
  * 与腿长 PID 输出相加后作为 VMC 的虚拟腿长力 F。 */
-#define LEG_GRAVITY_FF    (29.0f)
+#define LEG_GRAVITY_FF    (50.0f)
+
+/* 腿长 P-P 级联（手册 §8.1）：F = FF + Kp*(Ldes-L) - Kv*Ldot
+ * Kp_pos: 位置刚度 N/m；Kv_vel: 轴向阻尼 N/(m/s)。
+ * 垂直支撑 k=2*Kp=1600 N/m、等效质量 ~15 kg -> 固有频率 1.6 Hz，
+ * 临界阻尼需每腿 ~155 N/(m/s)，100 对应阻尼比 ~0.65，可调 60~200。 */
+#define LEG_KP_POS        (800.0f)
+#define LEG_KV_VEL        (100.0f)
+/* Ldot 一阶 LPF 系数（1kHz 循环），截止约 25 Hz */
+#define LEG_VEL_LPF       (0.15f)
+
+/* Roll 补偿（手册 §8.2，符号按本机 IMU 实测定）：
+ * ΔF = ROLL_KP*(-roll) - ROLL_KD*gyro[1]，右腿 += ΔF，左腿 -= ΔF。
+ * 实测 roll=-3.9°(右倾) 时 ΔF>0 -> 右腿加力扶正。
+ * 若上车后 roll 发散，把 ROLL_COMP_DIR 翻成 -1.0f。 */
+#define ROLL_KP           (100.0f)   /* N/rad */
+#define ROLL_KD           (10.0f)    /* N/(rad/s) */
+#define ROLL_COMP_DIR     (1.0f)
 
 /* 电机反馈量调试映射:在 Ozone/VarScope 全局符号里搜 chassis_dbg 即可
  * leg_*  : [0]r_front [1]r_behind [2]l_front [3]l_behind
@@ -61,8 +81,13 @@ typedef struct
     float lqr_x[10];
     float lqr_u[4];
     float Fleg_cmd[2];
+    float Ldot[2];        /* [0]左 [1]右，腿长速度估计（m/s），低通后 */
     float joint_T_cmd[4];
+    float fric_ff[4];     /* [0]r_f [1]r_b [2]l_f [3]l_b，本拍实际叠加的关节摩擦前馈(N·m) */
+    float wheel_ff[2];    /* [0]左轮 [1]右轮，本拍实际叠加的轮端摩擦前馈(N·m) */
     float Tw_cmd[2];
+    float Roll;           /* IMU roll，度，调试 roll 补偿用 */
+    float dFroll;         /* roll 补偿力差 ΔF（N），右腿为正 */
 } Chassis_Dbg_s;
 extern volatile Chassis_Dbg_s chassis_dbg;
 

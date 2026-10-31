@@ -19,11 +19,85 @@
 static DMMotorInstance *r_front_8009_motor,*r_behind_8009_motor;
 static DMMotorInstance *l_front_8009_motor, *l_behind_8009_motor;
 static DJIMotorInstance *l_wheel_motor, *r_wheel_motor;
-static PIDInstance l_leg_length_pid;
-static PIDInstance r_leg_length_pid;
 
 static PIDInstance l_theta_pid;
 static PIDInstance r_theta_pid;
+
+/* cmd层指令订阅: chassis_cmd 话题,robot_cmd 200Hz发布 */
+static Subscriber_t *chassis_cmd_sub;
+static Chassis_Ctrl_Cmd_s chassis_cmd_recv;
+#define RC_DRIVE_ACTIVE_VX 0.02f /* m/s, |vx|低于此视为松杆→定点 */
+
+/* ===== 模型一致 yaw（2026-10-31 剪刀腿根因修复）=====
+ * model_lagrange.py 的偏航状态 ψ = [Δ轮位移 + l·(θ_l−θ_r)]/(2Rl)，是"差动里程
+ * 计偏航"（原地搓地旋转模型不可见）。固件此前喂 IMU 世界航向，语义分裂：
+ * LQR 以为在修"腿别剪开"，实际被要求锁世界航向 → 无限剪刀循环。
+ * 固件轮编码器值含 R·θ 项（s_code = x_wheel + R·θ，见 lqr_v2/design.py），展开：
+ *   ψ  = (r_x − l_x)/(2Rl) + (R+l)/(2Rl)·(θ_l − θ_r)
+ *   ψ̇ = (r_dx − l_dx)/(2Rl) + (R+l)/(2Rl)·(dθ_l − dθ_r)
+ * 静止时不漂（无积分无陀螺），代价：站立不再锁世界航向，比赛需要时另加 IMU 外环。 */
+#define TRACK_HALF_WIDTH  (0.24f)                 /* 半轮距 m,= params.py R_L */
+#define WHEEL_RADIUS      (0.06f)                 /* 驱动轮半径 m,= params.py R_W */
+#define YAW_COEF_WHEEL    (1.0f / (2.0f * TRACK_HALF_WIDTH))                            /* 2.083 */
+#define YAW_COEF_LEG      ((WHEEL_RADIUS + 0.3f) / (2.0f * TRACK_HALF_WIDTH))           /* 0.75 */
+
+/* ===== 关节库仑摩擦前馈（2026-10-30）=====
+ * 实测左髋静摩擦 ≥2 N·m（右腿可随意掰动，左腿小腿需相当力气），死区让 LQR 的
+ * 差动 Tp 全被右腿吸收（剪刀只走一条腿）。补偿加在各自关节、电机自身坐标：
+ *   T_ff = T_c * tanh(ω / ω0)
+ * tanh 平滑过零防 1kHz 抖振。T_c 为 volatile 全局，可在调试器在线调：
+ * 左腿 0.5 起调（手测静摩擦大），右腿先 0（过补会变负阻尼、诱发极限环）。
+ * 判据：左右腿手掰阻力对称；注意 ω=0 时补偿为 0，静止突破仍靠平衡自振。 */
+volatile float l_joint_fric_t = 1.0f;   /* N·m/关节, 左腿 */
+volatile float r_joint_fric_t = 0.15f;   /* N·m/关节, 右腿 */
+#define FRICTION_TANH_W0  (0.15f)       /* rad/s, tanh 速度平滑尺度 */
+
+/* ===== 轮端库仑摩擦前馈（2026-10-31）=====
+ * 手感实测右轮毂电机阻尼大于左轮（自改减速箱装配差异），轮端摩擦同样吃掉
+ * 平衡环的小 Tw 修正与推车时的滚动 -> 单腿摆动不对称的轮端成因。
+ * 补偿按"前进为正"的轮速（r_wheel.r_dx / l_wheel.l_dx，m/s，左轮符号已翻正）
+ * 加在 Tw 上、限幅之前；左轮 l_wheel_direction=-1 的坐标换算在其后，随之落位。
+ * T_c volatile 在线调：右 0.10 / 左 0.05 起调（右轮阻尼大故给多），
+ * 过大 = 轮速通道负阻尼 -> 平衡低频抖动，出现即减半。tanh(0)=0 静止无自发力。 */
+volatile float r_wheel_fric_t = 0.10f;  /* N·m/轮, 右轮 */
+volatile float l_wheel_fric_t = 0.05f;  /* N·m/轮, 左轮 */
+#define WHEEL_FRICTION_TANH_V0 (0.03f)  /* m/s, tanh 速度平滑尺度(轮缘线速度) */
+
+/* 腿长速度估计状态（P-P 级联的阻尼项用） */
+typedef struct
+{
+    float last_L;      /* 上次变化的腿长读数 */
+    float dt_acc;      /* 距上次变化的累计时间 s */
+    float raw;         /* 本拍差分原始值 */
+    float filt;        /* 低通后的 Ldot */
+    uint8_t started;
+} LegVelState_s;
+static LegVelState_s l_legvel, r_legvel;
+
+/* Ldot 估计：DM 反馈 500Hz，1kHz 循环里差分隔拍为 0，
+ * 必须按"上次变化以来的累计时间"归一，否则均值少一半。 */
+static float LegVelEst(float L, LegVelState_s *st)
+{
+    if (!st->started)
+    {
+        st->last_L = L;
+        st->started = 1;
+        return 0.0f;
+    }
+    st->dt_acc += 0.001f;
+    if (L != st->last_L)
+    {
+        st->raw = (L - st->last_L) / st->dt_acc;
+        st->last_L = L;
+        st->dt_acc = 0.0f;
+    }
+    else
+    {
+        st->raw = 0.0f;
+    }
+    st->filt += LEG_VEL_LPF * (st->raw - st->filt);
+    return st->filt;
+}
 
 attitude_t *chassis_IMU_data;
 r_leg_Resolve r_leg;
@@ -91,6 +165,8 @@ static void ChassisDbgLqr(const ten_balance_observation *o)
 void ChassisInit()
 {
     chassis_IMU_data = INS_Init();
+
+    chassis_cmd_sub = SubRegister("chassis_cmd", sizeof(Chassis_Ctrl_Cmd_s));
 
     Motor_Init_Config_s r_config = {
         .can_init_config = {
@@ -167,22 +243,9 @@ void ChassisInit()
 
 
 
-    static PID_Init_Config_s r_leg_length_pid_config = 
-
-    {
-        .Kp = 800.0f,
-        .Ki = 0.0f,
-        .Kd = 0.0f,
-        .MaxOut = 150.0f,
-        .DeadBand = 0.0f,
-        .Improve = PID_Integral_Limit | PID_Derivative_On_Measurement,
-        .IntegralLimit = 0.0f,
-    };
-
-
-    PIDInit(&r_leg_length_pid, &r_leg_length_pid_config);
-    PID_Init_Config_s l_leg_length_pid_config = r_leg_length_pid_config;
-    PIDInit(&l_leg_length_pid, &l_leg_length_pid_config);
+    /* 腿长 P-P 级联（手册 §8.1）取代原单环 PID：
+     * F = 重力前馈 + Kp_pos*(Ldes-L) - Kv_vel*Ldot
+     * 正方向：F>0 = 伸腿（VMC.c 的 Tf=-gF, Tb=+gF 链路，实车已验证）。 */
 
 
 
@@ -200,6 +263,41 @@ void ChassisTask()
     /* 使能帧只在 DMMotorInit/DMMotorEnable 里发一次。原来在这里每 5ms 发两帧
      * DM_CMD_MOTOR_MODE，既占 CAN 带宽又打断 MIT 帧时序，已移除。 */
     SetPowerLimit(1000000.0f);   /* @Todo 接裁判系统后换成真实底盘功率 */
+
+    /* ===== 接收 cmd 层指令 + 零力急停路径 =====
+     * 边沿触发: Stop/Enable 只置标志,电机输出任务持续按标志发零/正常帧。 */
+    SubGetMessage(chassis_cmd_sub, (void *)&chassis_cmd_recv);
+    static uint8_t zero_force_last = 0;
+    static uint8_t drive_last = 0; /* 行驶模式锁存,零力恢复时置0强制重新锚定 */
+    static uint8_t standing_last = 0; /* 站立测试模式锁存,进入沿锚定 yaw */
+    uint8_t zero_force = (chassis_cmd_recv.chassis_mode == CHASSIS_ZERO_FORCE);
+    if (zero_force != zero_force_last)
+    {
+        if (zero_force)
+        {
+            DMMotorStop(r_front_8009_motor);
+            DMMotorStop(r_behind_8009_motor);
+            DMMotorStop(l_front_8009_motor);
+            DMMotorStop(l_behind_8009_motor);
+            DJIMotorStop(l_wheel_motor);
+            DJIMotorStop(r_wheel_motor);
+        }
+        else
+        {
+            DMMotorEnable(r_front_8009_motor);
+            DMMotorEnable(r_behind_8009_motor);
+            DMMotorEnable(l_front_8009_motor);
+            DMMotorEnable(l_behind_8009_motor);
+            DJIMotorEnable(l_wheel_motor);
+            DJIMotorEnable(r_wheel_motor);
+            /* 急停期间车体可能被挪动,强制下一拍重新锚定/冻结目标 */
+            drive_last = 0;
+        }
+        zero_force_last = zero_force;
+    }
+    if (zero_force)
+        return; /* 停机标志已生效,本拍不再计算控制量 */
+
     /* 用多圈展开后的连续位置；β 的整圈歧义在 *_Alpha_beta_calculate 里归一化 */
     float r_theta_f=r_front_8009_motor->measure.total_position;
     float r_theta_b=r_behind_8009_motor->measure.total_position;
@@ -216,18 +314,7 @@ void ChassisTask()
     float l_wheel_angle= -l_wheel_motor->measure.total_angle;
     float l_wheel_w= -l_wheel_motor->measure.speed_aps;
 
-    ten_targets.s_target=0.0f;
-    ten_targets.ds_target=0.0f;
-    ten_targets.yaw_target=0.0f;
-    ten_targets.dyaw_target=0.0f;
-    ten_targets.l_theta_target=0.000f;
-    ten_targets.l_dtheta_target=0;
-    ten_targets.r_theta_target=0.000f;
-    ten_targets.r_dtheta_target=0;
-   
-    ten_targets.phi_target=0;
-    ten_targets.dphi_target=0;
-
+    /* 腿长目标保持站立调试基线;行驶目标在 BalanceObserve 之后生成 */
     ten_targets.l_leg_length_target = 0.3f;
     ten_targets.r_leg_length_target = 0.3f;
 
@@ -236,27 +323,131 @@ void ChassisTask()
     r_wheel_control(r_wheel_angle,r_wheel_w,&r_wheel);
     l_wheel_control(l_wheel_angle,l_wheel_w,&l_wheel);
     BalanceObserve(&ten_balance_observe);
+
+    /* 模型一致 yaw：用里程计+腿角差重构 model_lagrange.py 的 ψ（见文件头部说明）。
+     * BalanceObserve 里的 IMU yaw/dyaw 在此被整体替换；IMU 仅保留 φ/roll 用途。 */
+    ten_balance_observe.yaw = YAW_COEF_WHEEL * (r_wheel.r_x - l_wheel.l_x)
+                            + YAW_COEF_LEG * (ten_balance_observe.l_theta - ten_balance_observe.r_theta);
+    ten_balance_observe.dyaw = YAW_COEF_WHEEL * (r_wheel.r_dx - l_wheel.l_dx)
+                             + YAW_COEF_LEG * (ten_balance_observe.l_dtheta - ten_balance_observe.r_dtheta);
     ChassisDbgLqr(&ten_balance_observe);
+
+    /* ===== 遥控目标生成(cmd层意图 → LQR目标) =====
+     * 行驶(CHASSIS_WHEELLEG_DRIVE): vx>阈值→控速(s_target跟随s), 松杆→定点(s_target冻结);
+     *                               wz 积分为 yaw_target,松杆冻结→航向锁定。
+     * 锁定(CHASSIS_NO_FOLLOW等): 进入瞬间冻结当前 s/yaw 为目标 → 原地定住。
+     * 上电首拍锁定即冻结,此时 s≈0,yaw≈0,与站立调试的硬编码基线等价。 */
+    /* drive 在函数级作用域: 目标生成分支共用 */
+    uint8_t drive = (chassis_cmd_recv.chassis_mode == CHASSIS_WHEELLEG_DRIVE);
+    if (chassis_cmd_recv.chassis_mode == CHASSIS_STANDING_TEST)
+    {
+        /* 站立调试基线: 除 yaw 外全零(腿长0.3m已在上方设置)。
+         * yaw_target 进入沿锚定当前 ψ 后冻结——里程计 ψ 会随推车/弧线漂移累计
+         * 差动轮里程,若硬编码 0 会产生常值 yaw 误差 → 常值差动 Tp → 单腿被压死。
+         * drive_last 置0,退出本模式后按进入沿重新锚定/冻结。 */
+        if (!standing_last)
+            ten_targets.yaw_target = ten_balance_observe.yaw;
+        ten_targets.s_target        = 0.0f;
+        ten_targets.ds_target       = 0.0f;
+        ten_targets.dyaw_target     = 0.0f;
+        ten_targets.l_theta_target  = 0.0f;
+        ten_targets.l_dtheta_target = 0.0f;
+        ten_targets.r_theta_target  = 0.0f;
+        ten_targets.r_dtheta_target = 0.0f;
+        ten_targets.phi_target      = 0.0f;
+        ten_targets.dphi_target     = 0.0f;
+        drive_last = 0;
+    }
+    else
+    {
+    if (drive && !drive_last) /* 行驶进入沿(含急停恢复后): 目标锚定当前位姿 */
+    {
+        ten_targets.s_target   = ten_balance_observe.s;
+        ten_targets.yaw_target = ten_balance_observe.yaw;
+    }
+    if (drive)
+    {
+        if (fabsf(chassis_cmd_recv.vx) > RC_DRIVE_ACTIVE_VX)
+        {
+            ten_targets.ds_target = chassis_cmd_recv.vx;
+            ten_targets.s_target  = ten_balance_observe.s;
+        }
+        else
+        {
+            ten_targets.ds_target = 0.0f;
+        }
+        ten_targets.yaw_target += chassis_cmd_recv.wz * 0.001f; /* ChassisTask 1kHz */
+        ten_targets.dyaw_target = 0.0f;
+    }
+        else
+        {
+            ten_targets.ds_target = 0.0f;
+            ten_targets.dyaw_target = 0.0f;
+            if (!drive_last) /* 锁定进入沿: 冻结当前位姿为目标 */
+            {
+                ten_targets.s_target   = ten_balance_observe.s;
+                ten_targets.yaw_target = ten_balance_observe.yaw;
+            }
+        }
+        drive_last = drive;
+    } /* end: 非站立测试模式 */
+    standing_last = (chassis_cmd_recv.chassis_mode == CHASSIS_STANDING_TEST);
+
+    /* yaw_target 卷绕保护：目标始终与实测 ψ 取同一分支，LQR 的 x[2] 限在 ±π 内，
+     * 防止 wz 长时间积分与分支卷绕差 2π 时 Tp 猛跳。 */
+    float yaw_ref_err = ten_targets.yaw_target - ten_balance_observe.yaw;
+    yaw_ref_err -= 2.0f * PI * roundf(yaw_ref_err / (2.0f * PI));
+    ten_targets.yaw_target = ten_balance_observe.yaw + yaw_ref_err;
+
     LQR_calc(&ten_balance_observe,&ten_targets,&four_control_datas);
     chassis_dbg.lqr_u[0] = four_control_datas.l_Tw;
     chassis_dbg.lqr_u[1] = four_control_datas.r_Tw;
     chassis_dbg.lqr_u[2] = four_control_datas.l_Tp;
     chassis_dbg.lqr_u[3] = four_control_datas.r_Tp;
     /* 虚拟腿长力 = 重力前馈 + 腿长 PID；VMC 内部再按修正后的 J^T 映射。 */
-    four_control_datas.r_Tleg = LEG_GRAVITY_FF
-        + PIDCalculate(&r_leg_length_pid, ten_balance_observe.r_leg_length, ten_targets.r_leg_length_target);
-    four_control_datas.l_Tleg = LEG_GRAVITY_FF
-        + PIDCalculate(&l_leg_length_pid, ten_balance_observe.l_leg_length, ten_targets.l_leg_length_target);
+    float l_dot = LegVelEst(ten_balance_observe.l_leg_length, &l_legvel);
+    float r_dot = LegVelEst(ten_balance_observe.r_leg_length, &r_legvel);
+    float l_pid_out = LEG_KP_POS * (ten_targets.l_leg_length_target - ten_balance_observe.l_leg_length)
+                      - LEG_KV_VEL * l_dot;
+    float r_pid_out = LEG_KP_POS * (ten_targets.r_leg_length_target - ten_balance_observe.r_leg_length)
+                      - LEG_KV_VEL * r_dot;
+    LIMIT_MIN_MAX(l_pid_out, -150.0f, 150.0f);   /* 沿用原 PID MaxOut=150 */
+    LIMIT_MIN_MAX(r_pid_out, -150.0f, 150.0f);
+    /* Roll 补偿（手册 §8.2）：右倾(roll<0)时右腿加力、左腿减力。
+     * Roll 单位度 -> rad；Gyro[1] 为 roll 角速度(rad/s)。 */
+    float roll_rad = chassis_IMU_data->Roll * 0.01745329252f;
+    float dF_roll = ROLL_COMP_DIR * (ROLL_KP * (-roll_rad) - ROLL_KD * chassis_IMU_data->Gyro[1]);
+    four_control_datas.l_Tleg = LEG_GRAVITY_FF + l_pid_out - dF_roll;
+    four_control_datas.r_Tleg = LEG_GRAVITY_FF + r_pid_out + dF_roll;
     chassis_dbg.Fleg_cmd[0] = four_control_datas.l_Tleg;
     chassis_dbg.Fleg_cmd[1] = four_control_datas.r_Tleg;
+    chassis_dbg.Ldot[0] = l_dot;
+    chassis_dbg.Ldot[1] = r_dot;
+    chassis_dbg.Roll = chassis_IMU_data->Roll;
+    chassis_dbg.dFroll = dF_roll;
 
     VMC_Calc(&four_control_datas, &r_leg_motor_torques, &r_leg);
     l_VMC_Calc(&four_control_datas, &l_leg_motor_torques, &l_leg);
+
+    /* 关节摩擦前馈：VMC 输出的 Tf/Tb 已是电机自身坐标，与 measure.velocity 同系，
+     * 直接同号叠加即可（左右腿各自的坐标约定在 VMC 内部已处理完）。 */
+    float ff_rf = r_joint_fric_t * tanhf(r_front_8009_motor->measure.velocity  / FRICTION_TANH_W0);
+    float ff_rb = r_joint_fric_t * tanhf(r_behind_8009_motor->measure.velocity / FRICTION_TANH_W0);
+    float ff_lf = l_joint_fric_t * tanhf(l_front_8009_motor->measure.velocity  / FRICTION_TANH_W0);
+    float ff_lb = l_joint_fric_t * tanhf(l_behind_8009_motor->measure.velocity / FRICTION_TANH_W0);
+    r_leg_motor_torques.r_Tf += ff_rf;
+    r_leg_motor_torques.r_Tb += ff_rb;
+    l_leg_motor_torques.l_Tf += ff_lf;
+    l_leg_motor_torques.l_Tb += ff_lb;
 
     chassis_dbg.joint_T_cmd[0] = r_leg_motor_torques.r_Tf;
     chassis_dbg.joint_T_cmd[1] = r_leg_motor_torques.r_Tb;
     chassis_dbg.joint_T_cmd[2] = l_leg_motor_torques.l_Tf;
     chassis_dbg.joint_T_cmd[3] = l_leg_motor_torques.l_Tb;
+    chassis_dbg.fric_ff[0] = ff_rf;
+    chassis_dbg.fric_ff[1] = ff_rb;
+    chassis_dbg.fric_ff[2] = ff_lf;
+    chassis_dbg.fric_ff[3] = ff_lb;
 
 
     // DMMotorStop(r_front_8009_motor);
@@ -283,13 +474,20 @@ void ChassisTask()
 
     /* 轮力矩下发：先按 3508 的真实上限钳位，再换算成电流码。
      * 限幅必须放在换算之前 —— 见 chassis.h 里 WHEEL_T_MAX 的注释。 */
-    float r_Tw = four_control_datas.r_Tw;
-    float l_Tw = four_control_datas.l_Tw;
+    /* 轮端摩擦前馈：r_dx/l_dx 已是前进为正的轮缘线速度(m/s)，直接取符号；
+     * 左轮 l_wheel_direction=-1 的换算在 DMMotorSetRef 处，FF 加在换算前随之落位。 */
+    float ff_rw = r_wheel_fric_t * tanhf(r_wheel.r_dx / WHEEL_FRICTION_TANH_V0);
+    float ff_lw = l_wheel_fric_t * tanhf(l_wheel.l_dx / WHEEL_FRICTION_TANH_V0);
+
+    float r_Tw = four_control_datas.r_Tw + ff_rw;
+    float l_Tw = four_control_datas.l_Tw + ff_lw;
     LIMIT_MIN_MAX(r_Tw, -WHEEL_T_MAX, WHEEL_T_MAX);
     LIMIT_MIN_MAX(l_Tw, -WHEEL_T_MAX, WHEEL_T_MAX);
 
     chassis_dbg.Tw_cmd[0] = l_Tw;
     chassis_dbg.Tw_cmd[1] = r_Tw;
+    chassis_dbg.wheel_ff[0] = ff_lw;
+    chassis_dbg.wheel_ff[1] = ff_rw;
 
     DJIMotorSetRef(r_wheel_motor, WHEEL_T_PER_RAW * r_Tw);
     DJIMotorSetRef(l_wheel_motor, l_wheel_direction * WHEEL_T_PER_RAW * l_Tw);

@@ -1,4 +1,5 @@
 #include "remote_control.h"
+#include "robot_def.h"
 #include "string.h"
 #include "bsp_usart.h"
 #include "memory.h"
@@ -6,10 +7,31 @@
 #include "daemon.h"
 #include "bsp_log.h"
 
-#define REMOTE_CONTROL_FRAME_SIZE 18u // 遥控器接收的buffer大小
+#if REMOTE_CONTROL_USE_SBUS
+#define REMOTE_CONTROL_FRAME_SIZE 25u
+#else
+#define REMOTE_CONTROL_FRAME_SIZE 18u
+#endif
 
 // 遥控器数据
 static RC_ctrl_t rc_ctrl[2];     //[0]:当前数据TEMP,[1]:上一次的数据LAST.用于按键持续按下和切换的判断
+// Global scalar telemetry, independent of chassis test modes.
+volatile int16_t rc_right_x, rc_right_y, rc_left_x, rc_left_y, rc_dial;
+volatile unsigned int rc_switch_left, rc_switch_right, rc_online;
+
+static void RemoteControlUpdateMonitor(uint8_t online)
+{
+    rc_online = online;
+    rc_right_x = online ? rc_ctrl[TEMP].rc.rocker_r_ : 0;
+    rc_right_y = online ? rc_ctrl[TEMP].rc.rocker_r1 : 0;
+    rc_left_x = online ? rc_ctrl[TEMP].rc.rocker_l_ : 0;
+    rc_left_y = online ? rc_ctrl[TEMP].rc.rocker_l1 : 0;
+    rc_dial = online ? rc_ctrl[TEMP].rc.dial : 0;
+    rc_switch_left = online ? rc_ctrl[TEMP].rc.switch_left : 0;
+    rc_switch_right = online ? rc_ctrl[TEMP].rc.switch_right : 0;
+}
+
+static uint8_t rc_received = 0;
 static uint8_t rc_init_flag = 0; // 遥控器初始化标志位
 
 // 遥控器拥有的串口实例,因为遥控器是单例,所以这里只有一个,就不封装了
@@ -20,6 +42,7 @@ static DaemonInstance *rc_daemon_instance;
  * @brief 矫正遥控器摇杆的值,超过660或者小于-660的值都认为是无效值,置0
  *
  */
+#if !REMOTE_CONTROL_USE_SBUS
 static void RectifyRCjoystick()
 {
     for (uint8_t i = 0; i < 5; ++i)
@@ -27,12 +50,57 @@ static void RectifyRCjoystick()
             *(&rc_ctrl[TEMP].rc.rocker_l_ + i) = 0;
 }
 
+#endif
+
 /**
  * @brief 遥控器数据解析
  *
  * @param sbus_buf 接收buffer
  */
-static void sbus_to_rc(const uint8_t *sbus_buf)
+#if REMOTE_CONTROL_USE_SBUS
+// FS-i6x/iA6B: nominal raw range 240..1807, centre 1024.
+static int16_t SbusAxis(const uint8_t *b, unsigned channel)
+{
+    unsigned bit = channel * 11, byte = 1 + bit / 8, shift = bit % 8;
+    unsigned packed = b[byte] | ((unsigned)b[byte + 1] << 8);
+    if (shift > 5) packed |= (unsigned)b[byte + 2] << 16;
+    int raw = (int)((packed >> shift) & 0x7ff) - 1024;
+    int value = raw * 660 / (raw < 0 ? 784 : 783);
+    return value > 660 ? 660 : value < -660 ? -660 : value;
+}
+
+static uint8_t SbusSwitch(int16_t value)
+{
+    return value < -220 ? RC_SW_UP : value > 220 ? RC_SW_DOWN : RC_SW_MID;
+}
+
+static void sbus_to_rc(const uint8_t *b)
+{
+    memset(&rc_ctrl[TEMP], 0, sizeof(RC_ctrl_t));
+    rc_ctrl[TEMP].rc.rocker_r_ = SbusAxis(b, 0);   /* CH1 右杆水平 */
+    rc_ctrl[TEMP].rc.rocker_r1 = SbusAxis(b, 1);   /* CH2 右杆竖直 */
+    rc_ctrl[TEMP].rc.rocker_l_ = SbusAxis(b, 2);   /* CH3 (FlySky美国手: 左杆竖直,台架确认) */
+    rc_ctrl[TEMP].rc.rocker_l1 = SbusAxis(b, 3);   /* CH4 (FlySky美国手: 左杆水平,台架确认) */
+    /* 以下通道分配严格按《FS-i6x搭配iA6B接收端使用文档》强制配置表,
+     * 遥控器端: 辅助通道 VrA/VrB/SwA/SwB/SwC/SwD → CH5~CH10 */
+    rc_ctrl[TEMP].rc.knob_a   = SbusAxis(b, 4);            /* CH5 VrA 旋钮(外壳标4) */
+    rc_ctrl[TEMP].rc.knob_b   = SbusAxis(b, 5);            /* CH6 VrB 旋钮(外壳标5) */
+    /* 外壳丝印 SW0~SW3 从左到右,按文档图示通道序号续排: SW0=CH7(SwA) ... SW3=CH10(SwD) */
+    rc_ctrl[TEMP].rc.switch_a = SbusSwitch(SbusAxis(b, 6)); /* CH7 SwA =外壳SW0(最左,两档): 急停开关 */
+    rc_ctrl[TEMP].rc.switch_b = SbusSwitch(SbusAxis(b, 7)); /* CH8 SwB =外壳SW1 */
+    rc_ctrl[TEMP].rc.switch_c = SbusSwitch(SbusAxis(b, 8)); /* CH9 SwC =外壳SW2(三档): 模式开关 */
+    rc_ctrl[TEMP].rc.switch_d = SbusSwitch(SbusAxis(b, 9)); /* CH10 SwD=外壳SW3 */
+    /* 语义别名,robot_cmd 按语义取用:
+     * switch_left  = 模式开关(三档SW2/CH9): 下=遥控行驶 中/上=站立锁定
+     * switch_right = 急停开关(两档SW0/CH7): 上=运行 下=零力急停
+     * dial         = VrA 旋钮,本版不接功能 */
+    rc_ctrl[TEMP].rc.switch_left  = rc_ctrl[TEMP].rc.switch_c;
+    rc_ctrl[TEMP].rc.switch_right = rc_ctrl[TEMP].rc.switch_a;
+    rc_ctrl[TEMP].rc.dial         = rc_ctrl[TEMP].rc.knob_a;
+    memcpy(&rc_ctrl[LAST], &rc_ctrl[TEMP], sizeof(RC_ctrl_t));
+}
+#else
+static void dbus_to_rc(const uint8_t *sbus_buf)
 {
     // 摇杆,直接解算时减去偏置
     rc_ctrl[TEMP].rc.rocker_r_ = ((sbus_buf[0] | (sbus_buf[1] << 8)) & 0x07ff) - RC_CH_VALUE_OFFSET;                              //!< Channel 0
@@ -46,7 +114,7 @@ static void sbus_to_rc(const uint8_t *sbus_buf)
     rc_ctrl[TEMP].rc.switch_left = ((sbus_buf[5] >> 4) & 0x000C) >> 2; //!< Switch left
 
     // 鼠标解析
-    rc_ctrl[TEMP].mouse.x = (sbus_buf[6] | (sbus_buf[7] << 8)); //!< Mouse X axis
+    rc_ctrl[TEMP].mouse.x = -(sbus_buf[6] | (sbus_buf[7] << 8)); //!< Mouse X axis
     rc_ctrl[TEMP].mouse.y = (sbus_buf[8] | (sbus_buf[9] << 8)); //!< Mouse Y axis
     rc_ctrl[TEMP].mouse.press_l = sbus_buf[12];                 //!< Mouse Left Is Press ?
     rc_ctrl[TEMP].mouse.press_r = sbus_buf[13];                 //!< Mouse Right Is Press ?
@@ -87,22 +155,33 @@ static void sbus_to_rc(const uint8_t *sbus_buf)
     memcpy(&rc_ctrl[LAST], &rc_ctrl[TEMP], sizeof(RC_ctrl_t)); // 保存上一次的数据,用于按键持续按下和切换的判断
 }
 
-/**
- * @brief 对sbus_to_rc的简单封装,用于注册到bsp_usart的回调函数中
- *
- */
-static void RemoteControlRxCallback()
+#endif
+
+static void RemoteControlRxCallback(void)
 {
-    DaemonReload(rc_daemon_instance);         // 先喂狗
-    sbus_to_rc(rc_usart_instance->recv_buff); // 进行协议解析
+    const uint8_t *b = rc_usart_instance->recv_buff;
+    if (rc_usart_instance->recv_size != REMOTE_CONTROL_FRAME_SIZE) return;
+#if REMOTE_CONTROL_USE_SBUS
+    if (b[0] != 0x0f || b[24] != 0x00) return;
+    if (b[23] & 0x0c) {
+        RemoteControlUpdateMonitor(0);
+        rc_received = 0;
+        memset(rc_ctrl, 0, sizeof(rc_ctrl));
+        return;
+    }
+    sbus_to_rc(b);
+#else
+    dbus_to_rc(b);
+#endif
+    RemoteControlUpdateMonitor(1);
+    rc_received = 1;
+    DaemonReload(rc_daemon_instance);
 }
 
-/**
- * @brief 遥控器离线的回调函数,注册到守护进程中,串口掉线时调用
- *
- */
 static void RCLostCallback(void *id)
 {
+    RemoteControlUpdateMonitor(0);
+    rc_received = 0;
     memset(rc_ctrl, 0, sizeof(rc_ctrl)); // 清空遥控器数据
     USARTServiceInit(rc_usart_instance); // 尝试重新启动接收
     LOGWARNING("[rc] remote control lost");
@@ -110,11 +189,21 @@ static void RCLostCallback(void *id)
 
 RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *rc_usart_handle)
 {
-    USART_Init_Config_s conf;
+    // Protocol owns line format; CubeMX owns pins, clock, IRQ and RX DMA.
+#if REMOTE_CONTROL_USE_SBUS
+    const uint32_t stop_bits = UART_STOPBITS_2;
+#else
+    const uint32_t stop_bits = UART_STOPBITS_1;
+#endif
+    if (USARTConfigure(rc_usart_handle, 100000, UART_WORDLENGTH_9B,
+                       UART_PARITY_EVEN, stop_bits) != HAL_OK) {
+        Error_Handler();
+        return NULL;
+    }
+    USART_Init_Config_s conf = {0};
     conf.module_callback = RemoteControlRxCallback;
     conf.usart_handle = rc_usart_handle;
     conf.recv_buff_size = REMOTE_CONTROL_FRAME_SIZE;
-    rc_usart_instance = USARTRegister(&conf);
 
     // 进行守护进程的注册,用于定时检查遥控器是否正常工作
     Daemon_Init_Config_s daemon_conf = {
@@ -123,6 +212,8 @@ RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *rc_usart_handle)
         .owner_id = NULL, // 只有1个遥控器,不需要owner_id
     };
     rc_daemon_instance = DaemonRegister(&daemon_conf);
+    // Register last: DMA callbacks now have a valid daemon instance.
+    rc_usart_instance = USARTRegister(&conf);
 
     rc_init_flag = 1;
     return rc_ctrl;
@@ -131,6 +222,6 @@ RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *rc_usart_handle)
 uint8_t RemoteControlIsOnline()
 {
     if (rc_init_flag)
-        return DaemonIsOnline(rc_daemon_instance);
+        return rc_received && DaemonIsOnline(rc_daemon_instance);
     return 0;
 }

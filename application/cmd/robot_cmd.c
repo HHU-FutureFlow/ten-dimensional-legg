@@ -152,58 +152,65 @@ static void CalcOffsetAngle()
 
 /**
  * @brief 控制输入为遥控器(调试时)的模式和控制量设置
+ *        FS-i6X + iA6B (SBUS),仅实现轮腿的前后移动与机体转向。
  *
+ *        语义约定(chassis侧按 chassis_mode 解读):
+ *          vx  = 前后速度指令 ds_cmd,单位 m/s,前进为正
+ *          vy  = 未使用,恒0
+ *          wz  = 转向角速度指令,单位 rad/s,左转为正
+ *          chassis_mode = CHASSIS_WHEELLEG_DRIVE(行驶) / CHASSIS_ZERO_FORCE(急停)
+ *
+ *        注意:本层只产生"操作手意图"(死区+缩放+低通),
+ *        s_target/yaw_target 的锚定与积分在 chassis.c 目标生成层完成。
  */
 static void RemoteControlSet()
 {
-    // 控制底盘和云台运行模式,云台待添加,云台是否始终使用IMU数据?
-    if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],底盘跟随云台
-    {
-        chassis_cmd_send.chassis_mode = CHASSIS_ROTATE;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
-    }
-    else if (switch_is_mid(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[中],底盘和云台分离,底盘保持不转动
-    {
-        chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_FREE_MODE;
-    }
+    /* ---- 轮腿行驶参数 ---- */
+#define RC_STICK_DEADBAND 20.0f  /* 摇杆死区,±660归一化计数 */
+#define WHEELLEG_VX_MAX   1.0f   /* 满杆前进速度 m/s,首次实车勿超1.5 */
+#define WHEELLEG_WZ_MAX   2.0f   /* 满杆转向角速度 rad/s,wz>0=左转=LQR yaw正方向 */
+#define RC_CMD_LPF_ALPHA  0.15f  /* 指令一阶低通系数(200Hz,τ≈25ms) */
 
-    // 云台参数,确定云台控制数据
-    if (switch_is_mid(rc_data[TEMP].rc.switch_left)) // 左侧开关状态为[中],视觉模式
-    {
-        // 待添加,视觉会发来和目标的误差,同样将其转化为total angle的增量进行控制
-        // ...
-    }
-    // 左侧开关状态为[下],或视觉未识别到目标,纯遥控器拨杆控制
-    if (switch_is_down(rc_data[TEMP].rc.switch_left) || vision_recv_data->target_state == NO_TARGET)
-    { // 按照摇杆的输出大小进行角度增量,增益系数需调整
-        gimbal_cmd_send.yaw += 0.005f * (float)rc_data[TEMP].rc.rocker_l_;
-        gimbal_cmd_send.pitch += 0.001f * (float)rc_data[TEMP].rc.rocker_l1;
-    }
-    // 云台软件限位
+    static float vx_cmd_lpf = 0.0f;
+    static float wz_cmd_lpf = 0.0f;
 
-    // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整
-    chassis_cmd_send.vx = 30.0f * (float)rc_data[TEMP].rc.rocker_r_; // _水平方向
-    chassis_cmd_send.vy = 30.0f * (float)rc_data[TEMP].rc.rocker_r1; // 1数值方向
+    /* 前后: 右杆竖直(CH2,两种遥控一致);
+     * 转向: 左杆水平 —— DT7 是 CH2/rocker_l_,FS-i6X SBUS 是 CH4/rocker_l1(台架确认) */
+#if WHEELLEG_REMOTE_MODE == WHEELLEG_REMOTE_DBUS
+#define RC_STICK_TURN rocker_l_
+#else
+#define RC_STICK_TURN rocker_l1
+#endif
+    float stick_forward = (float)rc_data[TEMP].rc.rocker_r1;
+    float stick_turn    = (float)rc_data[TEMP].rc.RC_STICK_TURN;
 
-    // 发射参数
-    if (switch_is_up(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[上],弹舱打开
-        ;                                            // 弹舱舵机控制,待添加servo_motor模块,开启
-    else
-        ; // 弹舱舵机控制,待添加servo_motor模块,关闭
+    /* 死区 + 归一化缩放 */
+    float vx_cmd = 0.0f, wz_cmd = 0.0f;
+    if (stick_forward > RC_STICK_DEADBAND)
+        vx_cmd = (stick_forward - RC_STICK_DEADBAND) / (660.0f - RC_STICK_DEADBAND) * WHEELLEG_VX_MAX;
+    else if (stick_forward < -RC_STICK_DEADBAND)
+        vx_cmd = (stick_forward + RC_STICK_DEADBAND) / (660.0f - RC_STICK_DEADBAND) * WHEELLEG_VX_MAX;
+    if (stick_turn > RC_STICK_DEADBAND)
+        wz_cmd = -(stick_turn - RC_STICK_DEADBAND) / (660.0f - RC_STICK_DEADBAND) * WHEELLEG_WZ_MAX;
+    else if (stick_turn < -RC_STICK_DEADBAND)
+        wz_cmd = -(stick_turn + RC_STICK_DEADBAND) / (660.0f - RC_STICK_DEADBAND) * WHEELLEG_WZ_MAX;
+    /* 转向取反的原因: 摇杆左推解析为负值(FlySky/DT7 同为右推=+),
+     * 而 LQR 约定 yaw 左转为正(LQR.c 列序注释),取反后左推=wz>0=左转。 */
 
-    // 摩擦轮控制,拨轮向上打为负,向下为正
-    if (rc_data[TEMP].rc.dial < -100) // 向上超过100,打开摩擦轮
-        shoot_cmd_send.friction_mode = FRICTION_ON;
-    else
-        shoot_cmd_send.friction_mode = FRICTION_OFF;
-    // 拨弹控制,遥控器固定为一种拨弹模式,可自行选择
-    if (rc_data[TEMP].rc.dial < -500)
-        shoot_cmd_send.load_mode = LOAD_BURSTFIRE;
-    else
-        shoot_cmd_send.load_mode = LOAD_STOP;
-    // 射频控制,固定每秒1发,后续可以根据左侧拨轮的值大小切换射频,
-    shoot_cmd_send.shoot_rate = 8;
+    /* 一阶低通,柔化推杆冲击 */
+    vx_cmd_lpf += RC_CMD_LPF_ALPHA * (vx_cmd - vx_cmd_lpf);
+    wz_cmd_lpf += RC_CMD_LPF_ALPHA * (wz_cmd - wz_cmd_lpf);
+
+    chassis_cmd_send.vx           = vx_cmd_lpf;
+    chassis_cmd_send.vy           = 0.0f;
+    chassis_cmd_send.wz           = wz_cmd_lpf;
+    chassis_cmd_send.chassis_mode = CHASSIS_WHEELLEG_DRIVE;
+
+    /* 轮腿无云台/发射机构,保持无力与关闭,防止残留旧指令 */
+    gimbal_cmd_send.gimbal_mode = GIMBAL_ZERO_FORCE;
+    shoot_cmd_send.shoot_mode    = SHOOT_OFF;
+    shoot_cmd_send.friction_mode = FRICTION_OFF;
+    shoot_cmd_send.load_mode     = LOAD_STOP;
 }
 
 /**
@@ -332,16 +339,13 @@ static void MouseKeySet()
 }
 
 /**
- * @brief  紧急停止,包括遥控器左上侧拨轮打满/重要模块离线/双板通信失效等
- *         停止的阈值'300'待修改成合适的值,或改为开关控制.
- *
- * @todo   后续修改为遥控器离线则电机停止(关闭遥控器急停),通过给遥控器模块添加daemon实现
- *
+ * @brief  紧急停止: 急停开关(SwA/switch_right)下拨进入零力急停;
+ *         遥控器掉线时由 RobotCMDTask 置零行驶目标保持站立。
+ *         零力语义由 chassis.c 落实: 边沿触发对 6 个电机停机,机器人趴下。
  */
 static void EmergencyHandler()
 {
-    // 拨轮的向下拨超过一半进入急停模式.注意向打时下拨轮是正
-    if (rc_data[TEMP].rc.dial > 300 || robot_state == ROBOT_STOP) // 还需添加重要应用和模块离线的判断
+    if (switch_is_down(rc_data[TEMP].rc.switch_right) || robot_state == ROBOT_STOP)
     {
         robot_state = ROBOT_STOP;
         gimbal_cmd_send.gimbal_mode = GIMBAL_ZERO_FORCE;
@@ -351,11 +355,11 @@ static void EmergencyHandler()
         shoot_cmd_send.load_mode = LOAD_STOP;
         LOGERROR("[CMD] emergency stop!");
     }
-    // 遥控器右侧开关为[上],恢复正常运行
+    // 急停开关拨回[上],恢复正常运行
     if (switch_is_up(rc_data[TEMP].rc.switch_right))
     {
         robot_state = ROBOT_READY;
-        shoot_cmd_send.shoot_mode = SHOOT_ON;
+        shoot_cmd_send.shoot_mode = SHOOT_OFF;
         LOGINFO("[CMD] reinstate, robot ready");
     }
 }
@@ -376,13 +380,34 @@ void RobotCMDTask()
 
     // 根据gimbal的反馈值计算云台和底盘正方向的夹角,不需要传参,通过static私有变量完成
     CalcOffsetAngle();
-    // 根据遥控器左侧开关,确定当前使用的控制模式为遥控器调试还是键鼠
-    if (switch_is_down(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[下],遥控器控制
+#if WHEELLEG_REMOTE_MODE == WHEELLEG_REMOTE_NONE
+    /* 站立调试模式: 不响应任何遥控输入,发布站立测试基线
+     * (chassis侧收到 CHASSIS_STANDING_TEST 后目标全零,仅腿长保持0.3m) */
+    chassis_cmd_send.vx           = 0.0f;
+    chassis_cmd_send.vy           = 0.0f;
+    chassis_cmd_send.wz           = 0.0f;
+    chassis_cmd_send.chassis_mode = CHASSIS_STANDING_TEST;
+#else
+    // 模式门控: 三档模式开关(SW2/switch_left) 下=遥控行驶, 中/上=站立锁定。
+    // 键鼠控制已随 DT7 链路移除(FS-i6X 无键鼠)。
+    // 注意: 无论哪种模式都必须每拍刷新 chassis_cmd_send,
+    //       否则消息里会残留上一次的旧速度导致松杆后车辆继续移动。
+    if (switch_is_down(rc_data[TEMP].rc.switch_left) && RemoteControlIsOnline())
         RemoteControlSet();
-    else if (switch_is_up(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[上],键盘控制
-        MouseKeySet();
+    else if (robot_state != ROBOT_STOP) // 站立锁定: 行驶目标清零,原地保持
+    {
+        chassis_cmd_send.vx           = 0.0f;
+        chassis_cmd_send.vy           = 0.0f;
+        chassis_cmd_send.wz           = 0.0f;
+        chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
+    }
+    // 掉线保护: 遥控器离线时同站立锁定(目标清零保持站立);
+    // 若此前已处于急停态, EmergencyHandler 会维持 CHASSIS_ZERO_FORCE 不被覆盖。
+#endif
 
-    EmergencyHandler(); // 处理模块离线和遥控器急停等紧急情况
+#if WHEELLEG_REMOTE_MODE != WHEELLEG_REMOTE_NONE
+    EmergencyHandler(); // 处理遥控器急停(NONE模式下无遥控急停源,不编译)
+#endif
 
     // 设置视觉发送数据,还需增加加速度和角速度数据
     // VisionSetFlag(chassis_fetch_data.enemy_color,,chassis_fetch_data.bullet_speed)
