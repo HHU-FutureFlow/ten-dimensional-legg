@@ -97,7 +97,7 @@ typedef struct
         int16_t rocker_r1; // 右竖直
         int16_t dial;      // 侧边拨轮(DBUS)/旋钮别名(SBUS)
 
-        uint8_t switch_left;  // 左侧开关(DBUS) / SBUS=模式开关SW2三档(CH9)
+        uint8_t switch_left;  // 左侧开关(DBUS) / SBUS=行驶使能SW3两档(CH10,2026-11-15)
         uint8_t switch_right; // 右侧开关(DBUS) / SBUS=急停开关SW0两档(CH7)
 
         /* FS-i6X + iA6B (SBUS) 专属通道,按使用文档强制配置表+外壳丝印SW0~SW3:

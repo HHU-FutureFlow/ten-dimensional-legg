@@ -25,9 +25,17 @@ volatile float grf_fleg_fc  = 60.0f;  /* 腿力低通截止 Hz,力矩噪声 ~0.5
  * 状态机在"切轮/疯转"间振荡, 实测站不起来), 改**死延时激活**——上电后
  * 正常跑全量 LQR(行为同 GRF 之前), grf_air_delay ms 后检测才接入。 */
 volatile float grf_air_th_off = 30.0f;
-volatile float grf_air_th_on  = 50.0f;
+/* th_on 50→40(2026-11-15 emberprobe 实测): 悬空 θPD 锁腿后真实悬空稳态
+ * N_avg ≈ -9±3N(含俯仰晃动峰值仅 -6.1), 旧 27~42 带系腿乱摆时代数据已作废;
+ * 慢放卸力斜率仅 6~17N/s, 50N 要求压到接近全重才确认 → 机体下沉 1~3s
+ * (落地接管偏迟主诉的根因), 40 提前 0.6~1.7s 且与 th_off 保持 10N 迟滞。
+ * 快放/正常落地斜率 163~184N/s 本就穿越干脆, 不受影响。 */
+volatile float grf_air_th_on  = 40.0f;
 volatile uint16_t grf_air_hold_off = 100; /* 100ms */
-volatile uint16_t grf_air_hold_on  = 50;  /* 50ms */
+/* hold_on 50→25(2026-11-15): th_on=40 后穿越点斜率更低噪声占比大(站立 sd~3N),
+ * 25ms@1kHz 已足滤单拍尖峰; 实测 50ms 驻留无反复清零(穿越+驻留 0.10s 完成),
+ * 25 只是给低斜率穿越留余量。误解除方向=LQR 提前接管, 安全侧。 */
+volatile uint16_t grf_air_hold_on  = 25;  /* 25ms */
 volatile uint16_t grf_air_delay    = 3000; /* 死延时 ms: 上电后检测静默期,盖住垫高起立全程 */
 static uint8_t grf_air = 0;
 static uint16_t grf_air_cnt = 0;

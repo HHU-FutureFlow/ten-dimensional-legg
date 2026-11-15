@@ -388,8 +388,29 @@ void RobotCMDTask()
     chassis_cmd_send.wz           = 0.0f;
     chassis_cmd_send.chassis_mode = CHASSIS_STANDING_TEST;
 #else
-    // 模式门控: 三档模式开关(SW2/switch_left) 下=遥控行驶, 中/上=站立锁定。
-    // 键鼠控制已随 DT7 链路移除(FS-i6X 无键鼠)。
+    // SW2 三挡腿长(2026-11-15): 下/中/上 = 0.15/0.25/0.35 m, 每拍刷新防消息残留旧值。
+    // 挡位激活门(同日): 遥控器上电解锁姿态要求全拨杆拨上(SW2 停上位=0.35),
+    // 直接切行驶模式腿长会立刻斜坡 —— 未激活时恒发 0.25 基线(经 chassis
+    // 斜坡回位, 不走"未配置"路径避免阶跃); SW2 首次拨到中间才激活挡位
+    // (中挡=0.25, 解锁手势本身无腿长变化)。
+    // 激活态复位: 遥控器掉线清(重上电又是全上姿态, 必须重新经中间解锁);
+    // 急停清(异常事件后所有许可类状态复位, 恢复起立重锚 0.25 后仍需
+    // 主动确认挡位, 与 prot 武装标志零力沿清零同惯例)。
+    static uint8_t leg_gear_armed = 0;
+    if (!RemoteControlIsOnline() || robot_state == ROBOT_STOP)
+        leg_gear_armed = 0;    /* 掉线/急停期间不激活: 防 SW2 恰停中间时清零/激活每拍对拍 */
+    else if (switch_is_mid(rc_data[TEMP].rc.switch_c))
+        leg_gear_armed = 1;
+    if (!leg_gear_armed)
+        chassis_cmd_send.leg_length_target = 0.25f;
+    else if (switch_is_down(rc_data[TEMP].rc.switch_c))
+        chassis_cmd_send.leg_length_target = 0.15f;
+    else if (switch_is_mid(rc_data[TEMP].rc.switch_c))
+        chassis_cmd_send.leg_length_target = 0.25f;
+    else
+        chassis_cmd_send.leg_length_target = 0.35f;
+    // 模式门控: 行驶使能开关(SW3/switch_left, 2026-11-15 由 SW2 挪来) 下=遥控行驶,
+    // 其余=站立锁定。键鼠控制已随 DT7 链路移除(FS-i6X 无键鼠)。
     // 注意: 无论哪种模式都必须每拍刷新 chassis_cmd_send,
     //       否则消息里会残留上一次的旧速度导致松杆后车辆继续移动。
     if (switch_is_down(rc_data[TEMP].rc.switch_left) && RemoteControlIsOnline())

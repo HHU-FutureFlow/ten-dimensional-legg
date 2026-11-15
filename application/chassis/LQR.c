@@ -100,7 +100,10 @@ void LQR_calc(ten_balance_observation *observe, ten_balance_target *balance_targ
          * Tw 行[0][1] 整行清零(轮毂力矩直接清零, 止悬空疯转);
          * Tp 行[2][3] 跳过 s|ds|yaw|dyaw 四列(轮里程计派生量, 悬空时为垃圾),
          * 保留 φ|dφ|lθ|ldθ|rθ|rdθ → 腿被 LQR 主动锁在目标位。
-         * φ 通道留否待实车判别: 悬空轻推俯仰, 衰减回位=留, 互激发散=改 j 起 8。 */
+         * φ 通道留否待实车判别: 悬空轻推俯仰, 衰减回位=留, 互激发散=改 j 起 8。
+         * (2026-11-15: 降维 Tp 的 θ 增益对髋静摩擦死区 0.2 rad 回正弱,
+         *  chassis.c 悬空分支已改用 air_kp_theta PD 直接覆写 Tp,
+         *  此处降维 Tp 悬空时被覆盖, 仅态7 翻身等不覆写场景继续生效) */
         if (lqr_air && i < 2)
             continue;                                   /* Tw = 0 */
         for (int j = (lqr_air && i >= 2) ? 4 : 0; j < 10; j++)

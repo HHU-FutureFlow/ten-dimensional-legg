@@ -22,7 +22,7 @@
 /* ===== 轮腿遥控接入模式(编译期切换,改后需重编译) =====
  * WHEELLEG_REMOTE_NONE: 不接遥控,纯站立调试。robot_cmd 每拍发布
  *   CHASSIS_STANDING_TEST,chassis 按原始硬编码基线跑(全零目标+腿长0.25m(rec_l_rise))。
- * WHEELLEG_REMOTE_SBUS: FS-i6X + iA6B (SW2三档=模式, SwA两档=急停)。
+ * WHEELLEG_REMOTE_SBUS: FS-i6X + iA6B (SW3两档=行驶使能, SW2三档=腿长挡, SW0两档=急停)。
  * WHEELLEG_REMOTE_DBUS: DT7 (左开关下=遥控, 右开关下=急停),解析走DBUS分支。 */
 #define WHEELLEG_REMOTE_NONE 0
 #define WHEELLEG_REMOTE_SBUS 1
@@ -182,6 +182,7 @@ typedef struct
     float offset_angle; // 底盘和归中位置的夹角
     chassis_mode_e chassis_mode;
     int chassis_speed_buff;
+    float leg_length_target; // 行驶腿长目标 m(2026-11-15 SW2三挡: 0.15/0.25/0.35; 0=不使用→chassis恒 rec_l_rise, 态1~4/6/7 恢复流程不接)
     // UI部分
     //  ...
 
