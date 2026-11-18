@@ -2,6 +2,7 @@
 #include "chassis.h"
 #include "balance.h"
 #include <math.h>
+#include <string.h>
 
 /* 腿杆参数与 VMC.c 同源（balance.h）,g(β) 为 VMC.c 同一公式的副本:
  * 改腿杆尺寸时两处要一起改。 */
@@ -14,74 +15,80 @@ volatile float grf_m_w      = 0.5f;   /* 单侧轮+轮轴组件 kg,参数表 m_u
 volatile float grf_accel_fc = 35.0f;  /* z̈ 低通截止 Hz,悬空判定要快,压噪靠腿力通道 */
 volatile float grf_fleg_fc  = 60.0f;  /* 腿力低通截止 Hz,力矩噪声 ~0.5N,可放宽 */
 
-/* T2 悬空门控参数（2026-11-02 第二版,改双侧均值判据）：
- * v1 教训: 双侧绝对门限 20N 触发不了——LQR 活跃时 F_leg 被搅在 25~60N,
- * "触发"需要系统先平静, 而平静需要先触发, 死锁(实测 CSV 同时最低 25/28N)。
- * 改用 N_avg=(左+右)/2: 站地时前后加减速只挪两轮分摊不改总和(N_avg≈车重份),
- * 对行驶天然免疫, 门限得以抬进实测悬空带(27~42N)上方。
- * 实测(20:04 CSV): 站立 N_avg 58~64, 悬空最低 27 -> 门限+100ms 驻留必触发,
- * 站立裕量 18N。落地 N_avg 直接跳回 60 附近, 50N 穿越干脆。
- * 2026-11-03 最终版: 弃武装门/旁路(垫高起立瞬态 N_avg 悬在 30~50 模糊带,
- * 状态机在"切轮/疯转"间振荡, 实测站不起来), 改**死延时激活**——上电后
- * 正常跑全量 LQR(行为同 GRF 之前), grf_air_delay ms 后检测才接入。 */
-volatile float grf_air_th_off = 30.0f;
-/* th_on 50→40(2026-11-15 emberprobe 实测): 悬空 θPD 锁腿后真实悬空稳态
- * N_avg ≈ -9±3N(含俯仰晃动峰值仅 -6.1), 旧 27~42 带系腿乱摆时代数据已作废;
- * 慢放卸力斜率仅 6~17N/s, 50N 要求压到接近全重才确认 → 机体下沉 1~3s
- * (落地接管偏迟主诉的根因), 40 提前 0.6~1.7s 且与 th_off 保持 10N 迟滞。
- * 快放/正常落地斜率 163~184N/s 本就穿越干脆, 不受影响。 */
-volatile float grf_air_th_on  = 40.0f;
-volatile uint16_t grf_air_hold_off = 100; /* 100ms */
-/* hold_on 50→25(2026-11-15): th_on=40 后穿越点斜率更低噪声占比大(站立 sd~3N),
- * 25ms@1kHz 已足滤单拍尖峰; 实测 50ms 驻留无反复清零(穿越+驻留 0.10s 完成),
- * 25 只是给低斜率穿越留余量。误解除方向=LQR 提前接管, 安全侧。 */
-volatile uint16_t grf_air_hold_on  = 25;  /* 25ms */
-volatile uint16_t grf_air_delay    = 3000; /* 死延时 ms: 上电后检测静默期,盖住垫高起立全程 */
-static uint8_t grf_air = 0;
-static uint16_t grf_air_cnt = 0;
-static uint32_t grf_tick = 0;   /* 上电起累计 tick @1kHz */
+/* 2026-11-18 EP 单侧提车时，卸载侧约 -21～10 N、支撑侧反力明显为正。
+ * 均值判据曾漏掉左侧卸载，也曾在右侧卸载时一起切掉左轮。
+ * 门限改为各侧 20/35 N（原均值 30/40 N），100/25 ms 暂沿用。
+ * 短时离地和双侧提车的响应需实车复核（UNTESTED）。 */
+volatile float grf_air_th_off = 20.0f;
+volatile float grf_air_th_on = 35.0f;
+volatile uint16_t grf_air_hold_off = 100;
+volatile uint16_t grf_air_hold_on = 25;
+volatile uint16_t grf_air_delay = 3000; /* 维持自起接管时的静默时间，ms @1kHz */
 
-uint8_t GRF_Airborne(void) { return grf_air; }
+static uint8_t grf_air_mask;
+static uint16_t grf_air_cnt_l, grf_air_cnt_r;
+static uint16_t grf_tick;
 
-/* 恢复流程 S4(LQR 交接)进入沿调用: 重启死延时并清悬空锁存。
- * 两个动机(2026-11-09 审查):
- * ① S1/S2 趴地位形 F_n 常 < th_off, 内部 grf_air 会锁存 1 —— chassis 侧
- *    只在 S1~S4 屏蔽本地快照、不清锁存, 蹬地力若波动则带病进 S5;
- * ② S4→S5 只是斜坡走完, 机体仍在拉起瞬态(重量转移期 N_avg 滞留 30~50
- *    模糊带), 与上电垫高起立同类 —— 用同一死延时语义盖住整个交接+收零
- *    +拉起(默认 3s, grf_air_delay 可调), 之后运行中悬空保护照常在线。 */
-void GRF_RestartAirDelay(void)
+uint8_t GRF_GetAirMask(void) { return grf_air_mask; }
+uint8_t GRF_Airborne(void) { return grf_air_mask == GRF_AIR_BOTH; }
+
+void GRF_ResetAirDwell(void)
 {
-    grf_tick = 0;
-    grf_air = 0;
-    grf_air_cnt = 0;
+    grf_air_cnt_l = grf_air_cnt_r = 0;
+    grf_dbg.air_count_l = grf_dbg.air_count_r = 0;
 }
 
-static void grf_air_update(float n_l, float n_r)
+void GRF_RestartAirDelay(void)
 {
-    float n_avg = 0.5f * (n_l + n_r);
+    /* 自起暂时趴地、低位的反力与站立标定分布不同。 */
+    grf_tick = 0;
+    grf_air_mask = 0;
+    grf_dbg.air_state = grf_dbg.air_mask = 0;
+    GRF_ResetAirDwell();
+}
 
-    /* 死延时: 上电后 grf_air_delay ms 内 air 恒 0(检测不接入),
-     * 全量 LQR 正常跑; 延时只在这开闸一次, 之后不再有激活/撤销逻辑。 */
-    if (++grf_tick <= grf_air_delay)
+static void grf_update_side(uint8_t side, float normal_force, uint16_t *count)
+{
+    const uint8_t airborne = grf_air_mask & side;
+    /* 无效反馈或反力回到迟滞区时，重新计算连续驻留。 */
+    if (!(grf_dbg.valid_mask & side) ||
+        !(airborne ? normal_force > grf_air_th_on : normal_force < grf_air_th_off))
+    {
+        *count = 0;
         return;
+    }
 
-    if (!grf_air)
+    const uint16_t hold = airborne ? grf_air_hold_on : grf_air_hold_off;
+    if (++(*count) >= hold)
     {
-        if (n_avg < grf_air_th_off)
-        {
-            if (++grf_air_cnt >= grf_air_hold_off) { grf_air = 1; grf_air_cnt = 0; }
-        }
-        else grf_air_cnt = 0;
+        grf_air_mask ^= side;
+        *count = 0;
     }
-    else
+}
+
+static void grf_air_update(void)
+{
+    if (grf_tick < grf_air_delay)
     {
-        if (n_avg > grf_air_th_on)
-        {
-            if (++grf_air_cnt >= grf_air_hold_on) { grf_air = 0; grf_air_cnt = 0; }
-        }
-        else grf_air_cnt = 0;
+        ++grf_tick;
+        return;
     }
+
+    grf_update_side(GRF_AIR_LEFT, grf_dbg.F_n_l, &grf_air_cnt_l);
+    grf_update_side(GRF_AIR_RIGHT, grf_dbg.F_n_r, &grf_air_cnt_r);
+    grf_dbg.air_mask = grf_air_mask;
+    grf_dbg.air_state = GRF_Airborne();
+    grf_dbg.air_count_l = grf_air_cnt_l;
+    grf_dbg.air_count_r = grf_air_cnt_r;
+}
+
+/* STM32 的 float 为 IEEE 754 binary32。发布构建的 -Ofast 可消去 isfinite，
+ * 此处查指数位，避免无效反馈进入低通后破坏离地判据。 */
+static uint8_t grf_finite(float value)
+{
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return (bits & 0x7f800000u) != 0x7f800000u;
 }
 
 typedef struct { float y; uint8_t started; } GRF_Lpf_s;
@@ -108,9 +115,7 @@ void GRF_Init(void)
 {
     grf_dbg = (GRF_Dbg_s){0};
     lpf_fleg_l = lpf_fleg_r = lpf_zdd = lpf_fn_l = lpf_fn_r = (GRF_Lpf_s){0, 0};
-    grf_air = 0;
-    grf_air_cnt = 0;
-    grf_tick = 0;   /* 死延时从 Init 起算 */
+    GRF_RestartAirDelay();
 }
 
 void GRF_Update(float r_Tf, float r_Tb, float l_Tf, float l_Tb, float dt)
@@ -122,8 +127,10 @@ void GRF_Update(float r_Tf, float r_Tb, float l_Tf, float l_Tb, float dt)
     float g_r = grf_leg_g(r_leg.r_beta);
     float g_l = grf_leg_g(l_leg.l_beta);
     float F_r = 0.0f, F_l = 0.0f;
-    if (fabsf(g_r) > 0.01f) F_r = (r_Tb - r_Tf) / (2.0f * g_r);
-    if (fabsf(g_l) > 0.01f) F_l = (l_Tf - l_Tb) / (2.0f * g_l);
+    const uint8_t usable_r = grf_finite(g_r) && fabsf(g_r) > 0.01f;
+    const uint8_t usable_l = grf_finite(g_l) && fabsf(g_l) > 0.01f;
+    if (usable_r) F_r = (r_Tb - r_Tf) / (2.0f * g_r);
+    if (usable_l) F_l = (l_Tf - l_Tb) / (2.0f * g_l);
 
     /* ---- 竖直分量: θ 为摆杆相对竖直倾角（BalanceObserve 已扣 pitch） ---- */
     float Fz_r = F_r * cosf(ten_balance_observe.r_theta);
@@ -147,13 +154,25 @@ void GRF_Update(float r_Tf, float r_Tb, float l_Tf, float l_Tb, float dt)
 
     grf_dbg.F_n_l_raw = N_l;
     grf_dbg.F_n_r_raw = N_r;
-    grf_dbg.F_leg_l   = grf_lpf_step(&lpf_fleg_l, F_l, grf_fleg_fc, dt);
-    grf_dbg.F_leg_r   = grf_lpf_step(&lpf_fleg_r, F_r, grf_fleg_fc, dt);
-    grf_dbg.Flegz_l   = grf_dbg.F_leg_l * cosf(ten_balance_observe.l_theta);
-    grf_dbg.Flegz_r   = grf_dbg.F_leg_r * cosf(ten_balance_observe.r_theta);
-    grf_dbg.zdd_w     = grf_lpf_step(&lpf_zdd, zdd, grf_accel_fc, dt);
-    grf_dbg.F_n_l     = grf_lpf_step(&lpf_fn_l, N_l, grf_fleg_fc, dt);
-    grf_dbg.F_n_r     = grf_lpf_step(&lpf_fn_r, N_r, grf_fleg_fc, dt);
-    grf_air_update(grf_dbg.F_n_l, grf_dbg.F_n_r);
-    grf_dbg.air_state = grf_air;
+    uint8_t valid_mask = 0;
+    if (usable_l && grf_finite(N_l))
+    {
+        grf_dbg.F_leg_l = grf_lpf_step(&lpf_fleg_l, F_l, grf_fleg_fc, dt);
+        grf_dbg.Flegz_l = grf_dbg.F_leg_l * cosf(ten_balance_observe.l_theta);
+        grf_dbg.F_n_l = grf_lpf_step(&lpf_fn_l, N_l, grf_fleg_fc, dt);
+        valid_mask |= GRF_AIR_LEFT;
+    }
+    if (usable_r && grf_finite(N_r))
+    {
+        grf_dbg.F_leg_r = grf_lpf_step(&lpf_fleg_r, F_r, grf_fleg_fc, dt);
+        grf_dbg.Flegz_r = grf_dbg.F_leg_r * cosf(ten_balance_observe.r_theta);
+        grf_dbg.F_n_r = grf_lpf_step(&lpf_fn_r, N_r, grf_fleg_fc, dt);
+        valid_mask |= GRF_AIR_RIGHT;
+    }
+    if (grf_finite(zdd))
+        grf_dbg.zdd_w = grf_lpf_step(&lpf_zdd, zdd, grf_accel_fc, dt);
+
+    grf_dbg.valid_mask = valid_mask;
+    grf_dbg.F_n_avg = 0.5f * (grf_dbg.F_n_l + grf_dbg.F_n_r);
+    grf_air_update();
 }

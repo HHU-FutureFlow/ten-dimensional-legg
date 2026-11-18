@@ -185,6 +185,7 @@ typedef struct
     float leg_length_target; // 行驶腿长目标 m(2026-11-15 SW2三挡: 0.15/0.25/0.35; 0=不使用→chassis恒 rec_l_rise, 态1~4/6/7 恢复流程不接)
     // UI部分
     //  ...
+    uint32_t step_window_request; /* SBUS SW1 有效上→下时递增，底盘消费一次 */
 
 } Chassis_Ctrl_Cmd_s;
 

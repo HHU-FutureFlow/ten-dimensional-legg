@@ -3,6 +3,13 @@
 
 #include <stdint.h>
 
+enum
+{
+    GRF_AIR_LEFT  = 1u << 0,
+    GRF_AIR_RIGHT = 1u << 1,
+    GRF_AIR_BOTH  = GRF_AIR_LEFT | GRF_AIR_RIGHT
+};
+
 /* ===== GRF 地面反作用力观测器（手册第九章 T1, 2026-11-02）=====
  * 轮端自由体（本工程符号约定: F>0=伸腿, 腿把轮向下压）:
  *   N = m_w*(z̈_w + g) + F_leg,z
@@ -26,7 +33,12 @@ typedef struct
     float F_n_r;       /* 右轮地面反作用力 */
     float F_n_l_raw;   /* 未滤波原值（看噪声/调 LPF 用） */
     float F_n_r_raw;
-    uint8_t air_state; /* T2 悬空状态机: 0=触地 1=悬空 */
+    uint8_t air_state; /* 两侧均离地时为 1，兼容原全局状态观测 */
+    uint8_t air_mask;  /* bit0 左轮离地，bit1 右轮离地 */
+    uint8_t valid_mask; /* 本拍反力估计有效的侧，位序同 air_mask */
+    uint16_t air_count_l; /* 左侧当前转换的连续拍数 */
+    uint16_t air_count_r;
+    float F_n_avg;     /* 左右滤波估计均值 N，供 EP 对照 */
 } GRF_Dbg_s;
 
 extern volatile GRF_Dbg_s grf_dbg;
@@ -35,14 +47,17 @@ extern volatile float grf_m_w;        /* 单侧轮+轮轴组件质量 kg（参�
 extern volatile float grf_accel_fc;   /* z̈ LPF 截止频率 Hz */
 extern volatile float grf_fleg_fc;    /* 腿力 LPF 截止频率 Hz */
 
-/* ===== T2 悬空门控（迟滞+驻留+死延时激活）===== */
-extern volatile float grf_air_th_off;      /* 离地门限 N：双侧 F_n 低于此 */
-extern volatile float grf_air_th_on;       /* 落地门限 N：双侧 F_n 高于此（迟滞） */
+/* ===== 左右独立判定，共用标定参数和自起静默时间 ===== */
+extern volatile float grf_air_th_off;      /* 本侧离地门限 N，低于此才累计 */
+extern volatile float grf_air_th_on;       /* 本侧承载门限 N，高于此才累计 */
 extern volatile uint16_t grf_air_hold_off; /* 离地判定驻留 tick @1kHz */
 extern volatile uint16_t grf_air_hold_on;  /* 落地判定驻留 tick @1kHz */
 extern volatile uint16_t grf_air_delay;    /* 死延时 ms：上电后检测静默期,期间 air 恒 0 */
-uint8_t GRF_Airborne(void);                /* 1=悬空 0=触地（本拍状态机输出） */
-void GRF_RestartAirDelay(void);            /* 重启死延时+清悬空锁存(恢复流程 S4 进入沿调用) */
+/* 0 为双轮支撑，两侧位可独立置位或清除。 */
+uint8_t GRF_GetAirMask(void);
+uint8_t GRF_Airborne(void);                /* 仅双轮同时离地时为 1 */
+void GRF_ResetAirDwell(void);              /* 清当前驻留计数，保留已确认状态 */
+void GRF_RestartAirDelay(void);            /* 自起 S4 重启静默并清已确认离地状态 */
 
 void GRF_Init(void);
 /* @param r_Tf/r_Tb 右腿前后关节反馈力矩（电机坐标, N·m）

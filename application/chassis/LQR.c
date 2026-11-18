@@ -1,4 +1,8 @@
 #include "LQR.h"
+#include "grf_observer.h"
+#include "general_def.h"
+#include "motor_def.h"
+#include <math.h>
 
 /* ===== 分腿长 K 矩阵组（2026-11-01）=====
  * 由 lqr_v2/run_all.py 在 6 个腿长工作点生成（动力学互证通过），
@@ -59,16 +63,18 @@ float K_l040[4][10] =
  * 上电默认 0.30 带; 恢复流程从低腿长(折叠≈0.11)起步时, 首几次调用会逐带降到 l015。 */
 static float (*const K_sets[6])[10] = { K_l015, K_l020, K_l025, K_l030, K_l035, K_l040 };
 static uint8_t lqr_k_band = 3;      /* ep 可读: 当前 K 组下标 0..5 */
-static uint8_t lqr_air = 0;         /* 悬空降维标志, 由 chassis 经 LQR_SetAir 同步 */
 
 float rate = 1.0f;
 
-void LQR_SetAir(uint8_t air)
-{
-    lqr_air = air ? 1u : 0u;
-}
+/* 悬空摆矩行仅用本侧世界系摆角、角速度。原地面 K 的角增益约 10，
+ * 11-15 提车时曾推不过髋静摩擦。用原悬空 PD 的 30/2 和 8 N·m
+ * 限幅作为首版状态反馈初值，保持双侧提车的回正强度（切换效果待实测）。 */
+volatile float air_kp_theta = 30.0f; /* N·m/rad */
+volatile float air_kd_theta = 2.0f;  /* N·m·s/rad */
+volatile float air_tp_max = 8.0f;    /* N·m */
 
-void LQR_calc(ten_balance_observation *observe, ten_balance_target *balance_targets, four_control_data *control_datas)
+void LQR_calc(const ten_balance_observation *observe, const ten_balance_target *balance_targets,
+              uint8_t air_mask, four_control_data *control_datas)
 {
     float x[10];
     float u[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -94,20 +100,29 @@ void LQR_calc(ten_balance_observation *observe, ten_balance_target *balance_targ
     x[8] = observe->phi - balance_targets->phi_target;
     x[9] = observe->dphi - balance_targets->dphi_target;
 
+    /* 单侧空转也会污染平均里程和差动航向，支撑侧暂只用腿与机身姿态反馈。 */
+    const int first_col = air_mask ? 4 : 0;
     for (int i = 0; i < 4; i++)
     {
-        /* 手册第九章/§10.3 悬空降维: K 矩阵轮相关值清零
-         * Tw 行[0][1] 整行清零(轮毂力矩直接清零, 止悬空疯转);
-         * Tp 行[2][3] 跳过 s|ds|yaw|dyaw 四列(轮里程计派生量, 悬空时为垃圾),
-         * 保留 φ|dφ|lθ|ldθ|rθ|rdθ → 腿被 LQR 主动锁在目标位。
-         * φ 通道留否待实车判别: 悬空轻推俯仰, 衰减回位=留, 互激发散=改 j 起 8。
-         * (2026-11-15: 降维 Tp 的 θ 增益对髋静摩擦死区 0.2 rad 回正弱,
-         *  chassis.c 悬空分支已改用 air_kp_theta PD 直接覆写 Tp,
-         *  此处降维 Tp 悬空时被覆盖, 仅态7 翻身等不覆写场景继续生效) */
-        if (lqr_air && i < 2)
-            continue;                                   /* Tw = 0 */
-        for (int j = (lqr_air && i >= 2) ? 4 : 0; j < 10; j++)
-            u[i] += rate * K[i][j] * x[j];              /* Tp 自腿摆角列起算 */
+        const uint8_t side = (i % 2 == 0) ? GRF_AIR_LEFT : GRF_AIR_RIGHT;
+        if (air_mask & side)
+        {
+            if (i >= 2)
+            {
+                /* 世界系竖直目标为零。基座俯仰已进入世界系角观测，空侧
+                 * 不叠加地面 K 的直接俯仰反馈，避免机体一低头就把腿带偏。 */
+                float theta = (i == 2) ? observe->l_theta : observe->r_theta;
+                const float dtheta = (i == 2) ? observe->l_dtheta : observe->r_dtheta;
+                theta -= 2.0f * PI * roundf(theta / (2.0f * PI));
+                u[i] = air_kp_theta * theta + air_kd_theta * dtheta;
+                const float tp_max = air_tp_max;
+                LIMIT_MIN_MAX(u[i], -tp_max, tp_max);
+            }
+            continue; /* 空侧 Tw 保持零，Tp 走悬空增益行 */
+        }
+
+        for (int j = first_col; j < 10; j++)
+            u[i] += rate * K[i][j] * x[j];
     }
 
     control_datas->l_Tw = -u[0];

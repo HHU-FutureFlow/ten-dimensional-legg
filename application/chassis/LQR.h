@@ -4,7 +4,8 @@
 #include "chassis.h"
 #include "balance.h"
 
-void LQR_calc(ten_balance_observation *observe,ten_balance_target *balance_targets,four_control_data *control_datas);
-void LQR_SetAir(uint8_t air);   /* 手册ch9: 悬空降维开关(轮相关通道清零) */
+/* air_mask 按 GRF_AIR_LEFT/RIGHT 标记离地侧。空侧摆角目标为世界系竖直。 */
+void LQR_calc(const ten_balance_observation *observe, const ten_balance_target *balance_targets,
+              uint8_t air_mask, four_control_data *control_datas);
 
 #endif

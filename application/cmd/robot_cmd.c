@@ -430,6 +430,29 @@ void RobotCMDTask()
     EmergencyHandler(); // 处理遥控器急停(NONE模式下无遥控急停源,不编译)
 #endif
 
+#if WHEELLEG_REMOTE_MODE == WHEELLEG_REMOTE_SBUS
+    /* 掉线或退出行驶后，必须重新见到 SW1 上位才受理下拨。序号随指令持续发布，
+     * 底盘无需对齐遥控任务的单拍脉冲。 */
+    static uint8_t sw1_seen_up;
+    const uint8_t sw1 = rc_data[TEMP].rc.switch_b;
+    if (!RemoteControlIsOnline() ||
+        chassis_cmd_send.chassis_mode != CHASSIS_WHEELLEG_DRIVE)
+    {
+        sw1_seen_up = 0;
+    }
+    else if (switch_is_up(sw1))
+    {
+        sw1_seen_up = 1;
+    }
+    else if (!switch_is_mid(sw1))
+    {
+        if (switch_is_down(sw1) && sw1_seen_up)
+            ++chassis_cmd_send.step_window_request;
+
+        sw1_seen_up = 0;
+    }
+#endif
+
     // 设置视觉发送数据,还需增加加速度和角速度数据
     // VisionSetFlag(chassis_fetch_data.enemy_color,,chassis_fetch_data.bullet_speed)
 

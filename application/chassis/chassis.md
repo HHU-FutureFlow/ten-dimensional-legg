@@ -22,3 +22,11 @@
 ### 后续支持平衡底盘
 
 新增一个app balance_chassis
+
+## 逐侧触阶试验
+
+SBUS 遥控下，机体完成自起并站稳后将 SW3 置为行驶。SW1 从上拨到下开启一次检测窗口，时长由 `chassis.c` 的 `STEP_COLLISION_WINDOW_MS` 设置，默认 15000 ms。窗口内可松杆，只有正向进给才参与碰撞确认。到时、退出行驶、急停或进入恢复时关窗。
+
+首次实测用支架托住机体。若某侧确认触阶，底盘调用该侧前后两个 8009 的 `DMMotorStop` 和该轮的 `DJIMotorStop`。托稳机体后用现有零力模式进入再退出恢复使能，随后重新执行一次 SW1 上拨再下拨。
+
+EP 记录 `step_collision_dbg.enabled`、`history_ready_mask`、`speed_drop`、`rearward_angle`、`confirm_count`、`hit_mask` 和 `last_hit_tick`。掩码 1 为左、2 为右、3 为双侧。停机验证看对应电机的 `stop_flag`，`chassis_dbg.Tw_cmd` 是驱动停机门控之前的底盘请求。阈值需在与实际触碰时刻同步的平地和触阶样本上标定。

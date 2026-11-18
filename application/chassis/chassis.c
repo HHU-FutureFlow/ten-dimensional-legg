@@ -14,6 +14,8 @@
 #include "controller.h"
 #include "VMC.h"
 #include "grf_observer.h"
+#include "step_collision.h"
+#include "stm32f4xx_hal.h"
 #include <math.h>
 
 
@@ -28,6 +30,7 @@ static PIDInstance r_theta_pid;
 static Subscriber_t *chassis_cmd_sub;
 static Chassis_Ctrl_Cmd_s chassis_cmd_recv;
 #define RC_DRIVE_ACTIVE_VX 0.02f /* m/s, |vx|低于此视为松杆→定点 */
+#define STEP_COLLISION_WINDOW_MS 15000u /* SW1 单次检测窗口，修改源码后重新编译 */
 
 /* ===== 模型一致 yaw（2026-10-31 剪刀腿根因修复）=====
  * model_lagrange.py 的偏航状态 ψ = [Δ轮位移 + l·(θ_l−θ_r)]/(2Rl)，是"差动里程
@@ -191,19 +194,6 @@ volatile float    prot_pitch_exit = 0.3f;   /* 态4 出口: |Pitch|<此值 才�
 volatile float    prot_theta_win  = 1.2f;   /* 态7 出口: 双腿 |θ_body|<此值 才算回窗口 */
 volatile uint16_t prot_timeout    = 8000;   /* 态7 超时 tick -> 回脱力等重新切档 */
 volatile uint8_t  prot_force_arm  = 0;      /* ep 置 1 跳过切档直接武装（调试用, 武装后自动清零） */
-
-/* ===== T2 GRF 悬空门控（2026-11-03 改手册第九章降维; 2026-11-15 Tp 改直接 PD）=====
- * 悬空时 LQR_SetAir(1): K 矩阵轮相关值清零——Tw 整行清零,
- * Tp 跳过 s|ds|yaw|dyaw 列(降维保留, 但悬空实际 Tp 由下方 PD 参数覆写,
- * 见 ChassisTask 悬空分支)。
- * 输出端 Tw 再硬清一道双保险, 见 ChassisTask 悬空分支。 */
-/* 悬空 θ 保持 PD(2026-11-15): LQR 降维 Tp 的 θ 增益 ~10 N·m/rad, 对左髋
- * 静摩擦 ≥2 N·m 死区达 0.2 rad —— 提车实测轮子滚动带偏腿后无回正力。
- * kp=30 死区缩至 0.067 rad(prot_kp_theta 同级先例); 误差与 LQR 同源配对
- * (l_theta_target − l_theta, wrap_pi 防过顶 2π 跳变), 落地沿零跳变。 */
-volatile float air_kp_theta = 30.0f;    /* N·m/rad, 悬空腿角保持刚度 */
-volatile float air_kd_theta = 2.0f;     /* N·m·s/rad, 悬空腿角保持阻尼 */
-volatile float air_tp_max   = 8.0f;     /* N·m, 悬空 Tp 限幅(顶 ≥2N·m 静摩擦留 4 倍裕量) */
 
 /* 腿长速度估计状态（P-P 级联的阻尼项用） */
 typedef struct
@@ -416,7 +406,16 @@ void ChassisTask()
     /* ===== 接收 cmd 层指令 + 零力急停路径 =====
      * 边沿触发: Stop/Enable 只置标志,电机输出任务持续按标志发零/正常帧。 */
     SubGetMessage(chassis_cmd_sub, (void *)&chassis_cmd_recv);
+    static uint32_t last_step_request;
+    static uint32_t step_window_start_ms;
+    static uint8_t step_window_active;
+    /* 急停、自起期间的请求也要消费，禁止恢复正常后重放旧下拨。 */
+    const uint8_t new_step_request =
+        chassis_cmd_recv.step_window_request != last_step_request;
+    last_step_request = chassis_cmd_recv.step_window_request;
+
     static uint8_t zero_force_last = 0;
+    static uint8_t last_air_mask = 0; /* 双轮回到支撑时重锚里程参考 */
     static uint8_t drive_last = 0; /* 行驶模式锁存,零力恢复时置0强制重新锚定 */
     static uint8_t standing_last = 0; /* 站立测试模式锁存,进入沿锚定 yaw */
     static uint8_t lock_last = 0;     /* 锁定模式锁存,进入沿冻结 s/yaw 目标 */
@@ -431,6 +430,10 @@ void ChassisTask()
             DMMotorStop(l_behind_8009_motor);
             DJIMotorStop(l_wheel_motor);
             DJIMotorStop(r_wheel_motor);
+            GRF_ResetAirDwell(); /* 急停早退，前后样本不能拼成一次连续驻留 */
+            step_window_active = 0;
+            StepCollision_Reset();
+            last_air_mask = 0;
             /* S7 确认沿: 零力期间任务直接 return, 态7 块内的记录永远执行不到
              * (外部审查实锤"切零力再切出不可达"), 必须在进入沿记录。
              * 仅 S7 等确认时记录 —— 其余时机切零力不预支确认。 */
@@ -473,6 +476,9 @@ void ChassisTask()
     if (zero_force)
         return; /* 停机标志已生效,本拍不再计算控制量 */
 
+    const float prev_len_l = ten_targets.l_leg_length_target;
+    const float prev_len_r = ten_targets.r_leg_length_target;
+
     /* 用多圈展开后的连续位置；β 的整圈歧义在 *_Alpha_beta_calculate 里归一化 */
     float r_theta_f=r_front_8009_motor->measure.total_position;
     float r_theta_b=r_behind_8009_motor->measure.total_position;
@@ -500,6 +506,9 @@ void ChassisTask()
                l_front_8009_motor->measure.torque, l_behind_8009_motor->measure.torque,
                0.001f);
 
+    /* 趴地、顶升和翻身位形的反力分布与站立不同，按原自起路径处理。 */
+    uint8_t air_mask = (prone_rec_state == PRS_DONE) ? GRF_GetAirMask() : 0;
+
     /* ===== T3 机体系摆角 θ_body（2026-11-05, 函数级作用域）=====
      * balance.c:96 里 l_theta = θ_body − Pitch·rad, 加回来即得"腿相对机体竖直"
      * 的角 = 纯编码器运动学量, 与 IMU 姿态无关, 翻倒/欧拉角折返时依然有效
@@ -521,7 +530,8 @@ void ChassisTask()
      * 腿角项系数 (R+l)/(2R_L) 随当前生效腿长目标联动(遥控三挡切换不丢同步)。 */
     /* 遥控挡位腿长斜坡跟踪(2026-11-15): 目标<0.1=未配置(保持 rec_l_rise, 兼容
      * NONE 编译/未接遥控), 其余 clamp [0.15,0.40](K 带全覆盖上界, 高于机械底)。
-     * 放此处保证先于下方状态机取值。 */
+     * 任一轮离地时暂停更换挡位目标，承载恢复后由现有腿长斜坡继续跟挡。 */
+    if (!air_mask)
     {
         float leg_len_cmd = chassis_cmd_recv.leg_length_target;
         if (leg_len_cmd < 0.1f)
@@ -551,17 +561,6 @@ void ChassisTask()
      * 上电首拍锁定即冻结,此时 s≈0,yaw≈0,与站立调试的硬编码基线等价。
      * 恢复流程态1~4/态6: 本块目标随后被状态机覆盖(模式锁存照常更新); 态5 起本块
      * 接管(θ 收零/重锚完成前状态机仍短暂写)。腿长目标全程由状态机置位。 */
-    uint8_t air_state = GRF_Airborne(); /* T2 悬空快照,PD 段期间也有效(轮输出端共用) */
-    /* 自起恢复段(态1~4/态6)强制接地: GRF 阈值只在站立位形标定过, 趴/蹲/顶升位形
-     * F_n 观测未标定, 15:3x 实测塌回趴地后误判悬空 → Tw 清零+Tp 降维,
-     * LQR 弱到站不起来。态5(完成)恢复 —— 运行中悬空保护必须在线;
-     * 拉起过程若再遇误判由 T3 出窗监控兜底。 */
-    if ((prone_rec_state >= PRS_EXTEND && prone_rec_state <= PRS_LQR_RAMP)
-        || prone_rec_state == PRS_QUICK)
-        air_state = 0;
-    LQR_SetAir(air_state);              /* 悬空降维同步给 LQR(手册ch9: 轮相关通道清零) */
-    { /* 目标生成总跑, 态1~4/态6 由状态机随后覆盖; 态5 起归目标生成接管
-       * (θ 收零/起立斜坡/重锚完成前状态机仍短暂写) */
     /* drive 在函数级作用域: 目标生成分支共用 */
     uint8_t drive = (chassis_cmd_recv.chassis_mode == CHASSIS_WHEELLEG_DRIVE);
     if (chassis_cmd_recv.chassis_mode == CHASSIS_STANDING_TEST)
@@ -592,7 +591,7 @@ void ChassisTask()
     }
     if (drive)
     {
-        if (fabsf(chassis_cmd_recv.vx) > RC_DRIVE_ACTIVE_VX)
+        if (!air_mask && fabsf(chassis_cmd_recv.vx) > RC_DRIVE_ACTIVE_VX)
         {
             ten_targets.ds_target = chassis_cmd_recv.vx;
             ten_targets.s_target  = ten_balance_observe.s;
@@ -601,7 +600,8 @@ void ChassisTask()
         {
             ten_targets.ds_target = 0.0f;
         }
-        ten_targets.yaw_target += chassis_cmd_recv.wz * 0.001f; /* ChassisTask 1kHz */
+        if (!air_mask)
+            ten_targets.yaw_target += chassis_cmd_recv.wz * 0.001f; /* ChassisTask 1kHz */
         ten_targets.dyaw_target = 0.0f;
     }
         else
@@ -1149,8 +1149,6 @@ void ChassisTask()
     }
     dbg_goal_l = cur_l;   /* ep 可读: 当前摆角目标(连续角) */
     dbg_goal_r = cur_r;
-    dbg_len_l = ten_targets.l_leg_length_target;  /* ep 可读: 状态机当前腿长目标 */
-    dbg_len_r = ten_targets.r_leg_length_target;
 
     /* ===== T3: 运行中翻倒监控（2026-11-05, SPR chassis_task.c:362 同款判据换腿摆角版）=====
      * LQR 斜坡期/站立/行驶（态4/态5）双腿任一 |θ_body| 出窗驻留 -> 脱力进态7。
@@ -1185,7 +1183,72 @@ void ChassisTask()
         prot_cnt = 0;
     }
 
-    LQR_calc(&ten_balance_observe,&ten_targets,&four_control_datas);
+    /* 自起或翻倒保护可能在本拍改变状态，输出按最终模式仲裁。 */
+    if (prone_rec_state != PRS_DONE)
+        air_mask = 0;
+    const uint8_t air_l = air_mask & GRF_AIR_LEFT;
+    const uint8_t air_r = air_mask & GRF_AIR_RIGHT;
+    if (air_l)
+        ten_targets.l_leg_length_target = prev_len_l;
+    if (air_r)
+        ten_targets.r_leg_length_target = prev_len_r;
+    dbg_len_l = ten_targets.l_leg_length_target;
+    dbg_len_r = ten_targets.r_leg_length_target;
+
+    if (last_air_mask && !air_mask && prone_rec_state == PRS_DONE)
+    {
+        /* 恢复双轮里程反馈前清除空转期间的相对位移与航向误差。
+         * 接地输出在承载确认当拍切换。 */
+        ten_targets.s_target = ten_balance_observe.s;
+        ten_targets.yaw_target = ten_balance_observe.yaw;
+    }
+    last_air_mask = air_mask;
+
+    /* S5 还包含起立收尾，等升腿、重锚和摆角收零完成后才接收开窗请求。 */
+    const uint8_t step_window_allowed =
+        prone_rec_state == PRS_DONE && lift_top && rec6_anchor &&
+        fabsf(rec_tht_l) <= 0.01f && fabsf(rec_tht_r) <= 0.01f &&
+        chassis_cmd_recv.chassis_mode == CHASSIS_WHEELLEG_DRIVE;
+    const uint32_t now_ms = HAL_GetTick();
+
+    if (!step_window_allowed ||
+        (step_window_active &&
+         now_ms - step_window_start_ms >= STEP_COLLISION_WINDOW_MS))
+    {
+        step_window_active = 0;
+    }
+
+    if (new_step_request && step_window_allowed && !step_window_active)
+    {
+        StepCollision_Reset();
+        step_window_start_ms = now_ms;
+        step_window_active = 1;
+    }
+
+    const StepCollisionSample_s collision_sample[2] =
+    {
+        {l_wheel.l_dx, ten_balance_observe.l_theta},
+        {r_wheel.r_dx, ten_balance_observe.r_theta},
+    };
+    const uint8_t forward_drive = chassis_cmd_recv.vx > RC_DRIVE_ACTIVE_VX;
+    StepCollision_Update(step_window_active, forward_drive, air_mask, collision_sample);
+
+    /* 临时触阶试验：沿用电机停止锁存，关窗结束检测后仍需切零力再退出使能。 */
+    const uint8_t hit_mask = step_collision_dbg.hit_mask;
+    if (hit_mask & (1u << 0))
+    {
+        DMMotorStop(l_front_8009_motor);
+        DMMotorStop(l_behind_8009_motor);
+        DJIMotorStop(l_wheel_motor);
+    }
+    if (hit_mask & (1u << 1))
+    {
+        DMMotorStop(r_front_8009_motor);
+        DMMotorStop(r_behind_8009_motor);
+        DJIMotorStop(r_wheel_motor);
+    }
+
+    LQR_calc(&ten_balance_observe, &ten_targets, air_mask, &four_control_datas);
     chassis_dbg.lqr_u[0] = four_control_datas.l_Tw;
     chassis_dbg.lqr_u[1] = four_control_datas.r_Tw;
     chassis_dbg.lqr_u[2] = four_control_datas.l_Tp;
@@ -1253,42 +1316,6 @@ void ChassisTask()
         four_control_datas.r_Tw *= rec2_ramp;
     }
 
-    /* ===== T2: GRF 悬空门控（2026-11-03 手册第九章降维; 2026-11-15 Tp 改直接 PD）=====
-     * 悬空时 LQR_SetAir 已把 K 矩阵轮相关值清零: Tw=0(止疯转)。
-     * Tp 原 LQR 降维通道 θ 增益 ~10 N·m/rad, 对左髋静摩擦 ≥2 N·m 死区 0.2 rad
-     * —— 提车实测轮子滚动带偏腿后无回正力。改用 air_kp_theta PD 直接覆写
-     * (30 N·m/rad → 死区 0.067 rad); 误差与 LQR 同源配对(l_theta_target−l_theta,
-     * wrap_pi 防过顶 2π 跳变), 落地沿 LQR 瞄同一误差无缝接管。
-     * 态7 翻身(PRS_FLIP)不覆写: 该位形 GRF 未标定 air 易误判, 且翻身摆腿用
-     * 追赶式 Tp 语义不同, 保持原行为。
-     * 输出端 Tw 硬清一道双保险(也消 Tw 反作用对力矩反推的污染)。
-     * 腿锁住后 F_leg 卸到 -m_w·g, F_n 干净归 0;
-     * 落地沿(F_n 双侧>th_on 驻留)恢复 LQR 并重锚定 s/yaw 清空转里程漂移。 */
-    static uint8_t air_reanchor = 0;
-    if (air_state)
-    {
-        four_control_datas.l_Tw = 0.0f;
-        four_control_datas.r_Tw = 0.0f;
-        if (prone_rec_state != PRS_FLIP)
-        {
-            float l_air_err = rec_wrap_pi(ten_targets.l_theta_target - ten_balance_observe.l_theta);
-            float r_air_err = rec_wrap_pi(ten_targets.r_theta_target - ten_balance_observe.r_theta);
-            four_control_datas.l_Tp = air_kp_theta * l_air_err
-                                   - air_kd_theta * ten_balance_observe.l_dtheta;
-            four_control_datas.r_Tp = air_kp_theta * r_air_err
-                                   - air_kd_theta * ten_balance_observe.r_dtheta;
-            LIMIT_MIN_MAX(four_control_datas.l_Tp, -air_tp_max, air_tp_max);
-            LIMIT_MIN_MAX(four_control_datas.r_Tp, -air_tp_max, air_tp_max);
-        }
-        air_reanchor = 1;
-    }
-    else if (air_reanchor)
-    {   /* 落地沿: 悬空期间轮子自由空转的里程漂移一次性清掉 */
-        ten_targets.s_target   = ten_balance_observe.s;
-        ten_targets.yaw_target = ten_balance_observe.yaw;
-        air_reanchor = 0;
-    }
-    } /* end: 目标生成块(总跑; 态1~5 随后被状态机覆盖, 态6 归它接管) */
     /* 虚拟腿长力 = 重力前馈 + 腿长 PID；VMC 内部再按修正后的 J^T 映射。 */
     float l_dot = LegVelEst(ten_balance_observe.l_leg_length, &l_legvel);
     float r_dot = LegVelEst(ten_balance_observe.r_leg_length, &r_legvel);
@@ -1329,19 +1356,11 @@ void ChassisTask()
         grav_ff = LEG_GRAVITY_FF;
     if (prone_rec_state == PRS_LQR_RAMP)
         dF_roll *= rec2_ramp;   /* roll 补偿同随斜坡渐入 */
-    /* 悬空清零(2026-11-15): 无 GRF 承接, 50N 支撑前馈成纯推长内力, 与 ±dF_roll
-     * 叠加顶满 60N 误差带钳位(顶进饱和后增量刚度 0) → 单边腿长漂移, 提车实测
-     * 车体往一边偏时一侧持续伸长、一侧停在 25cm; roll 补偿无支撑面时为纯扰动源。
-     * 悬空维持腿长只需脚端自重级小力, 腿长 PID(1600N/m)独立锁定毫米级误差;
-     * 落地沿 0→50N 阶跃发生在 F_n 双侧>th_on 承力确认后, 由 GRF 直接消化,
-     * 与站立语义一致。态1~4/6 已强制接地不受影响; 态7 翻身期两项本就为 0。 */
-    if (air_state)
-    {
-        grav_ff  = 0.0f;
-        dF_roll  = 0.0f;
-    }
-    four_control_datas.l_Tleg = grav_ff + l_pid_out - dF_roll;
-    four_control_datas.r_Tleg = grav_ff + r_pid_out + dF_roll;
+    /* Roll 差动依赖两侧都有支撑。只撤空侧既有承重前馈，支撑侧继续承重。 */
+    if (air_mask)
+        dF_roll = 0.0f;
+    four_control_datas.l_Tleg = (air_l ? 0.0f : grav_ff) + l_pid_out - dF_roll;
+    four_control_datas.r_Tleg = (air_r ? 0.0f : grav_ff) + r_pid_out + dF_roll;
     chassis_dbg.Fleg_cmd[0] = four_control_datas.l_Tleg;
     chassis_dbg.Fleg_cmd[1] = four_control_datas.r_Tleg;
     chassis_dbg.Ldot[0] = l_dot;
@@ -1383,9 +1402,8 @@ void ChassisTask()
         /* 悬空选 _air 系数(2026-11-15): 悬空载荷相关摩擦低一个量级, 沿用着地
          * Tc 必过补成负阻尼(前日提车摆腿发散); 默认 0=跳过起安全基线,
          * 从 0 起步在线标定。态7 翻身不切(air 易误判+翻身摆腿要前馈破静摩擦)。 */
-        uint8_t fric_air = (air_state && prone_rec_state != PRS_FLIP) ? 1u : 0u;
-        float fric_t_r = fric_air ? r_joint_fric_t_air : r_joint_fric_t;
-        float fric_t_l = fric_air ? l_joint_fric_t_air : l_joint_fric_t;
+        float fric_t_r = air_r ? r_joint_fric_t_air : r_joint_fric_t;
+        float fric_t_l = air_l ? l_joint_fric_t_air : l_joint_fric_t;
         ff_rf = fric_t_r * tanhf(r_front_8009_motor->measure.velocity  / FRICTION_TANH_W0);
         ff_rb = fric_t_r * tanhf(r_behind_8009_motor->measure.velocity / FRICTION_TANH_W0);
         ff_lf = fric_t_l * tanhf(l_front_8009_motor->measure.velocity  / FRICTION_TANH_W0);
@@ -1428,30 +1446,21 @@ void ChassisTask()
     DMMotorSetRef(l_behind_8009_motor,
         isfinite(l_leg_motor_torques.l_Tb) ? l_leg_motor_torques.l_Tb : 0.0f);
 
-    /* 轮力矩下发：先按 3508 的真实上限钳位，再换算成电流码。
-     * 限幅必须放在换算之前 —— 见 chassis.h 里 WHEEL_T_MAX 的注释。 */
-    /* 轮端摩擦前馈：r_dx/l_dx 已是前进为正的轮缘线速度(m/s)，直接取符号；
-     * 左轮 l_wheel_direction=-1 的换算在 DMMotorSetRef 处，FF 加在换算前随之落位。
-     * PD 段(态1~4)与态7 轮力矩恒 0(轮未触地/不应滚动);态5 斜坡起轮控随 LQR 渐入恢复。 */
-    float r_Tw, l_Tw;
-    if (air_state || prone_rec_state <= PRS_PUSH || prone_rec_state == PRS_FLIP ||
-        prone_rec_state == PRS_QUICK)
-    {
-        /* 恢复 PD 段/翻身段/折叠快转段, 或 GRF 判悬空(T2): 轮力矩清零, 摩擦前馈一并跳过 */
-        r_Tw = 0.0f;
-        l_Tw = 0.0f;
-    }
-    else
-    {
-        float ff_rw = r_wheel_fric_t * tanhf(r_wheel.r_dx / WHEEL_FRICTION_TANH_V0);
-        float ff_lw = l_wheel_fric_t * tanhf(l_wheel.l_dx / WHEEL_FRICTION_TANH_V0);
-        r_Tw = four_control_datas.r_Tw + ff_rw;
-        l_Tw = four_control_datas.l_Tw + ff_lw;
-        LIMIT_MIN_MAX(r_Tw, -WHEEL_T_MAX, WHEEL_T_MAX);
-        LIMIT_MIN_MAX(l_Tw, -WHEEL_T_MAX, WHEEL_T_MAX);
-        chassis_dbg.wheel_ff[0] = ff_lw;
-        chassis_dbg.wheel_ff[1] = ff_rw;
-    }
+    /* 轮力矩在换算 C620 电流码前限幅。空轮连同摩擦前馈在最终输出闸清零，
+     * 支撑轮每拍照常下发，包含从离地转为承载的确认拍。 */
+    const uint8_t wheel_gate = (prone_rec_state <= PRS_PUSH ||
+                                prone_rec_state == PRS_FLIP ||
+                                prone_rec_state == PRS_QUICK);
+    const uint8_t wheel_gate_r = wheel_gate || air_r;
+    const uint8_t wheel_gate_l = wheel_gate || air_l;
+    const float ff_rw = wheel_gate_r ? 0.0f : r_wheel_fric_t * tanhf(r_wheel.r_dx / WHEEL_FRICTION_TANH_V0);
+    const float ff_lw = wheel_gate_l ? 0.0f : l_wheel_fric_t * tanhf(l_wheel.l_dx / WHEEL_FRICTION_TANH_V0);
+    float r_Tw = wheel_gate_r ? 0.0f : four_control_datas.r_Tw + ff_rw;
+    float l_Tw = wheel_gate_l ? 0.0f : four_control_datas.l_Tw + ff_lw;
+    LIMIT_MIN_MAX(r_Tw, -WHEEL_T_MAX, WHEEL_T_MAX);
+    LIMIT_MIN_MAX(l_Tw, -WHEEL_T_MAX, WHEEL_T_MAX);
+    chassis_dbg.wheel_ff[0] = ff_lw;
+    chassis_dbg.wheel_ff[1] = ff_rw;
     chassis_dbg.Tw_cmd[0] = l_Tw;
     chassis_dbg.Tw_cmd[1] = r_Tw;
 
