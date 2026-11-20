@@ -38,13 +38,18 @@ void GRF_ResetAirDwell(void)
     grf_dbg.air_count_l = grf_dbg.air_count_r = 0;
 }
 
+void GRF_ClearAirState(void)
+{
+    grf_air_mask = 0;
+    grf_dbg.air_state = grf_dbg.air_mask = 0;
+    GRF_ResetAirDwell();
+}
+
 void GRF_RestartAirDelay(void)
 {
     /* 自起暂时趴地、低位的反力与站立标定分布不同。 */
     grf_tick = 0;
-    grf_air_mask = 0;
-    grf_dbg.air_state = grf_dbg.air_mask = 0;
-    GRF_ResetAirDwell();
+    GRF_ClearAirState();
 }
 
 static void grf_update_side(uint8_t side, float normal_force, uint16_t *count)

@@ -74,7 +74,8 @@ volatile float air_kd_theta = 2.0f;  /* N·m·s/rad */
 volatile float air_tp_max = 8.0f;    /* N·m */
 
 void LQR_calc(const ten_balance_observation *observe, const ten_balance_target *balance_targets,
-              uint8_t air_mask, four_control_data *control_datas)
+              const ten_balance_target *step_targets, uint8_t wheel_block_mask,
+              uint8_t step_leg_mask, four_control_data *control_datas)
 {
     float x[10];
     float u[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -101,18 +102,22 @@ void LQR_calc(const ten_balance_observation *observe, const ten_balance_target *
     x[9] = observe->dphi - balance_targets->dphi_target;
 
     /* 单侧空转也会污染平均里程和差动航向，支撑侧暂只用腿与机身姿态反馈。 */
-    const int first_col = air_mask ? 4 : 0;
+    const int first_col = wheel_block_mask ? 4 : 0;
     for (int i = 0; i < 4; i++)
     {
         const uint8_t side = (i % 2 == 0) ? GRF_AIR_LEFT : GRF_AIR_RIGHT;
-        if (air_mask & side)
+        if (wheel_block_mask & side)
         {
             if (i >= 2)
             {
-                /* 世界系竖直目标为零。基座俯仰已进入世界系角观测，空侧
-                 * 不叠加地面 K 的直接俯仰反馈，避免机体一低头就把腿带偏。 */
+                /* 摆动侧走专用参考，普通空侧仍以世界系竖直为目标。 */
                 float theta = (i == 2) ? observe->l_theta : observe->r_theta;
-                const float dtheta = (i == 2) ? observe->l_dtheta : observe->r_dtheta;
+                float dtheta = (i == 2) ? observe->l_dtheta : observe->r_dtheta;
+                if (step_leg_mask & side)
+                {
+                    theta -= (i == 2) ? step_targets->l_theta_target : step_targets->r_theta_target;
+                    dtheta -= (i == 2) ? step_targets->l_dtheta_target : step_targets->r_dtheta_target;
+                }
                 theta -= 2.0f * PI * roundf(theta / (2.0f * PI));
                 u[i] = air_kp_theta * theta + air_kd_theta * dtheta;
                 const float tp_max = air_tp_max;

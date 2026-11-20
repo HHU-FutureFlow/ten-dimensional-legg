@@ -57,6 +57,7 @@ extern volatile uint16_t grf_air_delay;    /* 死延时 ms：上电后检测静�
 uint8_t GRF_GetAirMask(void);
 uint8_t GRF_Airborne(void);                /* 仅双轮同时离地时为 1 */
 void GRF_ResetAirDwell(void);              /* 清当前驻留计数，保留已确认状态 */
+void GRF_ClearAirState(void);              /* 清离地状态和计数，检测时序连续 */
 void GRF_RestartAirDelay(void);            /* 自起 S4 重启静默并清已确认离地状态 */
 
 void GRF_Init(void);
