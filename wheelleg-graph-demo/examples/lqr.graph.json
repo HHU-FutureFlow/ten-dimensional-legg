@@ -1,0 +1,4866 @@
+{
+  "schemaVersion": 2,
+  "projectId": "lqr-example",
+  "title": "十维 LQR · 输入输出示例",
+  "revision": 0,
+  "rootSceneId": "root",
+  "sourceRoots": {
+    "firmware": {
+      "label": "十维轮腿固件（源码可选）"
+    }
+  },
+  "model": {
+    "nodes": {
+      "observe": {
+        "id": "observe",
+        "label": "状态观测",
+        "description": "把传感器反馈整理成控制器能够使用的状态。",
+        "kind": "input",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/balance.c",
+            "symbol": "BalanceObserve",
+            "revision": "a7d8f90",
+            "line": 84
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 482,
+            "endLine": 543,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "verification": "2026-11-17 源码梳理；非实车验证",
+          "explanation": {
+            "receives": "左右轮和四个关节的编码器、反馈力矩，以及惯性测量单元的姿态、转速和加速度。",
+            "process": "由轮/腿运动学得到位移、速度、腿角和腿长；机身俯仰使用惯性姿态。底盘任务随后用轮差、腿角差重构偏航。",
+            "produces": "十维实际状态、左右腿长，以及供腿部控制、接地判断和补偿使用的观测包。",
+            "decisions": []
+          }
+        },
+        "sceneId": "root"
+      },
+      "target": {
+        "id": "target",
+        "label": "控制目标",
+        "description": "把操作意图和恢复阶段要求变成具体的控制目标。",
+        "kind": "input",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90",
+            "line": 547,
+            "endLine": 635
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 638,
+            "endLine": 1139,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "verification": "2026-11-17 源码梳理；非实车验证",
+          "explanation": {
+            "receives": "遥控前进/转向意图、行驶或锁定模式、当前位置/航向，以及恢复流程要求。",
+            "process": "行驶时生成速度目标并积分转向目标；松杆或锁定时冻结相应位置/航向。恢复过程再按当前阶段覆盖腿角和腿长目标。",
+            "produces": "十维参考状态、当前腿角目标和左右腿目标长度。",
+            "decisions": [
+              "有前进速度命令 → 位移目标跟随当前位置，让速度控制起作用。",
+              "松杆或锁定 → 保持冻结的位置/航向目标。",
+              "恢复未完成 → 使用该阶段给定的腿角/腿长；完成起立后再接遥控腿长挡位。"
+            ]
+          }
+        },
+        "sceneId": "root"
+      },
+      "gain": {
+        "id": "gain",
+        "label": "腿长选 K",
+        "description": "选择与当前腿长匹配的一组平衡反馈系数。",
+        "kind": "algorithm",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/LQR.c",
+            "symbol": "LQR_calc",
+            "revision": "a7d8f90",
+            "line": 77,
+            "endLine": 88
+          }
+        ],
+        "metadata": {
+          "verification": "2026-11-17 源码梳理；非实车验证",
+          "explanation": {
+            "receives": "左右腿的实际长度，单位米；并保留上一次使用的参数组。",
+            "process": "取两腿平均长度，在 0.15～0.40 m 的六组参数间选带；使用 1 cm 迟滞，减少边界附近来回切换。",
+            "produces": "一个 4×10 的 K 矩阵：规定每个状态误差分别怎样影响四路力矩。",
+            "decisions": [
+              "跨过当前带的相邻边界，并满足迟滞距离 → 切到相邻参数组。",
+              "仍在当前带或迟滞范围内 → 保留原参数组。"
+            ]
+          }
+        },
+        "sceneId": "root"
+      },
+      "air": {
+        "id": "air",
+        "label": "接地观测与阶段信息",
+        "description": "判断是否离地，并汇集后续控制需要的阶段和确认标志。",
+        "kind": "control",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90",
+            "line": 554,
+            "endLine": 562
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/grf_observer.c",
+            "line": 116,
+            "symbol": "GRF_Update",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "verification": "2026-11-17 源码梳理；非实车验证",
+          "explanation": {
+            "receives": "腿部几何、关节反馈力矩、竖直加速度；另读取保留的恢复阶段与翻身确认标志。",
+            "process": "估计左右轮的支撑力，再用平均支撑力、连续达标时间和迟滞判断接地；恢复阶段会屏蔽不适用的离地判断。",
+            "produces": "是否离地，以及“当前恢复阶段 / 翻身是否已确认 / 是否离地”的信息。",
+            "decisions": [
+              "上电或重启检测后的 3 s 内 → 暂不判离地。",
+              "原来接地，平均支撑力 < 30 N 连续约 100 ms → 判离地。",
+              "原来离地，平均支撑力 > 40 N 连续约 25 ms → 判接地。",
+              "腿长整理、对齐、蹬地、交接或折叠快转阶段 → 底盘本地暂按非离地处理。"
+            ]
+          }
+        },
+        "sceneId": "root"
+      },
+      "lqr": {
+        "id": "lqr",
+        "label": "十维状态反馈",
+        "description": "根据“实际状态离目标有多远”，计算四路原始纠偏力矩。",
+        "kind": "algorithm",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/LQR.c",
+            "symbol": "LQR_calc",
+            "revision": "a7d8f90",
+            "line": 71
+          }
+        ],
+        "metadata": {
+          "formula": "u = -K(x-x_ref)",
+          "stateOrder": [
+            "s",
+            "ds",
+            "yaw",
+            "dyaw",
+            "l_theta",
+            "l_dtheta",
+            "r_theta",
+            "r_dtheta",
+            "phi",
+            "dphi"
+          ],
+          "outputOrder": [
+            "l_Tw",
+            "r_Tw",
+            "l_Tp",
+            "r_Tp"
+          ],
+          "verification": "源码检查，未进行本轮实测",
+          "explanation": {
+            "receives": "十维实际状态、十维目标、当前腿长的 K 参数，以及是否离地。",
+            "process": "先逐项求实际值减目标值，再按 K 加权相加并取负号；各状态误差共同决定轮和腿需要的纠偏力矩。",
+            "produces": "左/右轮力矩 Tw 和左/右腿摆动力矩 Tp，均为 N·m；后续模式处理仍可能改写。",
+            "decisions": [
+              "接地时 → 使用完整的十维反馈。",
+              "离地时 → 轮力矩清零；腿反馈不再使用轮里程计相关的位移、速度、偏航通道。"
+            ]
+          }
+        },
+        "sceneId": "root"
+      },
+      "mode": {
+        "id": "mode",
+        "label": "模式处理",
+        "description": "按恢复、交接、离地和等待条件，决定真正送往执行端的输出。",
+        "kind": "control",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90",
+            "line": 1201,
+            "endLine": 1372
+          }
+        ],
+        "metadata": {
+          "verification": "2026-11-17 源码梳理；非实车验证",
+          "explanation": {
+            "receives": "原始四路 LQR 力矩、独立腿长力、腿角目标/反馈，以及阶段、翻身确认、离地标志。",
+            "process": "先选择恢复 PD、平滑交接或普通 LQR；之后单独执行离地覆盖；最后检查是否允许输出。",
+            "produces": "经过选择和门控的轮力矩、腿摆动力矩与腿长力。",
+            "decisions": [
+              "整理/对齐/蹬地/折叠快转，或已确认的翻身 → 腿用恢复 PD，轮停止。",
+              "平衡接管阶段 → PD 逐渐退出、LQR 逐渐进入。",
+              "之后若离地 → 再按悬空规则覆盖；等待观测或等待翻身确认 → 最终输出清零。"
+            ]
+          }
+        },
+        "sceneId": "root",
+        "detailSceneId": "mode-detail"
+      },
+      "wheel": {
+        "id": "wheel",
+        "label": "轮端处理",
+        "description": "把允许使用的轮力矩变成左右轮电机指令。",
+        "kind": "output",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90",
+            "line": 1436,
+            "endLine": 1460
+          }
+        ],
+        "metadata": {
+          "verification": "2026-11-17 源码梳理；非实车验证",
+          "explanation": {
+            "receives": "模式处理后的轮力矩、左右轮缘线速度，以及当前恢复阶段和离地标志。",
+            "process": "允许驱动时按轮速方向叠加摩擦补偿、限制力矩，再换算成电流码；下发前检查数值是否有限。",
+            "produces": "左右轮电机的控制参考值。",
+            "decisions": [
+              "离地，或仍在观测等待/恢复 PD/翻身/折叠快转阶段 → 轮指令为零，跳过摩擦补偿。",
+              "允许驱动 → 使用补偿并限幅后的轮力矩。",
+              "结果出现 NaN 或无穷大 → 对应指令改为零。"
+            ]
+          }
+        },
+        "sceneId": "root"
+      },
+      "force": {
+        "id": "force",
+        "label": "腿长力控制",
+        "description": "根据腿长误差和机身侧倾，为两条腿分配伸缩方向的力。",
+        "kind": "algorithm",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90",
+            "line": 1292,
+            "endLine": 1345
+          }
+        ],
+        "metadata": {
+          "verification": "2026-11-17 源码梳理；非实车验证",
+          "explanation": {
+            "receives": "左右腿目标长度、实际长度及其变化，机身横滚角/角速度，以及恢复阶段和离地标志。",
+            "process": "腿长误差产生伸缩力，腿长变化速度提供阻尼；再叠加重力支撑和左右差动的横滚补偿，并限制误差控制分量。",
+            "produces": "左右腿轴向力 F_leg，单位 N；它与摆腿力矩 Tp 不同，之后还要经过输出闸。",
+            "decisions": [
+              "腿长整理 → 重力前馈为零；其他恢复 PD 阶段 → 用恢复专用支撑量。",
+              "平衡接管 → 支撑前馈与横滚补偿随交接比例渐入。",
+              "离地 → 关闭重力前馈和横滚补偿，腿长误差控制继续维持长度。"
+            ]
+          }
+        },
+        "sceneId": "root"
+      },
+      "vmc": {
+        "id": "vmc",
+        "label": "VMC 与关节执行",
+        "description": "把“沿腿施力”和“让腿摆动”分配给四个关节电机。",
+        "kind": "output",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/VMC.c",
+            "symbol": "VMC_Calc / l_VMC_Calc",
+            "revision": "a7d8f90",
+            "line": 9,
+            "endLine": 36
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1374,
+            "endLine": 1422,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "verification": "2026-11-17 源码梳理；非实车验证",
+          "explanation": {
+            "receives": "左右腿摆动力矩 Tp、腿长力 F_leg、当前腿部几何和关节转速，以及输出许可。",
+            "process": "利用当前几何将虚拟力/力矩映射成前后关节力矩，处理左右坐标方向；允许输出时再叠加关节摩擦前馈。",
+            "produces": "四个关节电机各自坐标系下的力矩参考值，单位 N·m。",
+            "decisions": [
+              "等待观测或翻身未确认 → 上游清零且不叠加关节摩擦前馈。",
+              "离地且不是翻身动作 → 使用悬空摩擦系数；当前该系数为零。",
+              "下发结果非有限值 → 对应电机参考值改为零。"
+            ]
+          }
+        },
+        "sceneId": "root"
+      },
+      "boundary_input_mode-detail": {
+        "id": "boundary_input_mode-detail",
+        "label": "来自上层的输入",
+        "description": "把父功能块接收的数据带入这一层。",
+        "kind": "boundary-input",
+        "status": "design",
+        "sourceRefs": [],
+        "metadata": {
+          "explanation": {
+            "receives": "父功能块外部接收的输入；名称、类型、单位与父端口保持一致。",
+            "process": "边界仅表示接口对应关系，不计算、不复制创建新的控制行为。",
+            "produces": "作为本层的输出端口，供内部功能块连接。",
+            "decisions": []
+          }
+        },
+        "sceneId": "mode-detail"
+      },
+      "boundary_output_mode-detail": {
+        "id": "boundary_output_mode-detail",
+        "label": "返回上层的输出",
+        "description": "把这一层处理完的数据交回父功能块。",
+        "kind": "boundary-output",
+        "status": "design",
+        "sourceRefs": [],
+        "metadata": {
+          "explanation": {
+            "receives": "内部节点送来的处理结果。",
+            "process": "边界仅表示接口对应关系，不计算、不复制创建新的控制行为。",
+            "produces": "送回父功能块对应的输出端口，供上层继续连接。",
+            "decisions": []
+          }
+        },
+        "sceneId": "mode-detail"
+      },
+      "mode_classify": {
+        "id": "mode_classify",
+        "label": "模式判定与状态转换",
+        "description": "决定恢复流程现在处在哪一步；进入子视图可看完整判定。",
+        "kind": "control",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 418,
+            "endLine": 1188,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "急停命令、机身/腿部观测、保留的阶段编号，以及是否已确认翻身动作。",
+            "process": "急停优先返回；只有初始化阶段重新按姿态选路线，其他阶段执行自己的动作和转移条件。运行中翻倒监控另受开关控制。",
+            "produces": "当前恢复阶段、翻身确认和离地信息，供后面的输出选择使用。",
+            "decisions": [
+              "零力急停 → 本拍任务提前结束。",
+              "初始化且观测有效 → 选择翻身等待、折叠快转、常规起立或正常控制。",
+              "已在某阶段 → 检查该阶段的到位、驻留和超时结果。"
+            ]
+          }
+        },
+        "sceneId": "mode-detail",
+        "detailSceneId": "startup-detail"
+      },
+      "mode_pack": {
+        "id": "mode_pack",
+        "label": "收纳四路原始力矩",
+        "description": "这只是图内接口打包，源码里没有新增计算。",
+        "kind": "note",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1188,
+            "endLine": 1192,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "LQR 刚算出的左/右轮力矩和左/右腿摆动力矩。",
+            "process": "按固定顺序收纳为同一组数，减少图上的重复连线；不改变任何值。",
+            "produces": "四路原始反馈力矩，供交接混合或普通反馈路径使用。",
+            "decisions": []
+          }
+        },
+        "sceneId": "mode-detail"
+      },
+      "mode_branch": {
+        "id": "mode_branch",
+        "label": "选择当前控制方式",
+        "description": "先辨认恢复阶段，再选择三条互斥路径中的一条。",
+        "kind": "decision",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1201,
+            "endLine": 1254,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "当前恢复阶段，以及翻身动作是否已获操作手确认。",
+            "process": "先检查是否应由恢复 PD 接管；不满足再检查是否进入平衡交接；仍不满足则保留普通 LQR。",
+            "produces": "“恢复 PD / 平滑交接 / 普通反馈”三条路径的选择结果。",
+            "decisions": [
+              "腿长整理、对齐、蹬地或折叠快转；或翻身且已确认 → 选恢复 PD。",
+              "前一条件不成立，且处于平衡接管（S4）→ 选平滑交接。",
+              "其余情况 → 保留原始 LQR；后面仍要检查离地和输出闸。"
+            ]
+          }
+        },
+        "sceneId": "mode-detail"
+      },
+      "mode_pd": {
+        "id": "mode_pd",
+        "label": "恢复时用腿角 PD 接管",
+        "description": "腿按恢复目标移动，轮子暂不参与驱动。",
+        "kind": "algorithm",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1205,
+            "endLine": 1234,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "恢复分支选择结果、两腿的目标摆角、实际摆角和摆动速度；不使用原始 LQR 力矩。",
+            "process": "按角度偏差产生纠偏力矩，用角速度抑制摆动；跨角度边界时取正确角差，并限制力矩幅值。",
+            "produces": "左右腿 PD 力矩；左右轮力矩直接为零。",
+            "decisions": [
+              "翻身且已确认 → 使用翻身专用目标和增益。",
+              "整理、对齐、蹬地或折叠快转 → 使用恢复目标和增益。"
+            ]
+          }
+        },
+        "sceneId": "mode-detail"
+      },
+      "mode_ramp": {
+        "id": "mode_ramp",
+        "label": "平滑切换到 LQR",
+        "description": "让原来的支撑控制逐渐退出，避免交接时突然失去支撑。",
+        "kind": "algorithm",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1236,
+            "endLine": 1253,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "原始 LQR 力矩、仍在工作的恢复 PD 目标/反馈，以及从 0 增至 1 的交接比例。",
+            "process": "腿力矩按“PD×(1−比例) + LQR×比例”混合；轮力矩按比例渐入。",
+            "produces": "连续变化的左右腿力矩和逐渐启用的左右轮力矩。",
+            "decisions": [
+              "进入平衡接管（S4）→ 比例从零开始。",
+              "比例达到 1 → 交给起立与正常控制阶段（S5）。"
+            ]
+          }
+        },
+        "sceneId": "mode-detail"
+      },
+      "mode_keep": {
+        "id": "mode_keep",
+        "label": "使用原始 LQR 输出",
+        "description": "未进入恢复接管或交接混合时，先保留原始反馈。",
+        "kind": "algorithm",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1188,
+            "endLine": 1254,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "四路原始 LQR 力矩，以及普通反馈路径已被选中的结果。",
+            "process": "四路数值直接向后传递；这里不叠加新的补偿，也不保证最终一定下发。",
+            "produces": "未经本阶段改写的四路力矩，仍需后续离地覆盖和门控。",
+            "decisions": []
+          }
+        },
+        "sceneId": "mode-detail"
+      },
+      "mode_merge": {
+        "id": "mode_merge",
+        "label": "取被选中的阶段输出",
+        "description": "三条路径中只有当前条件命中的结果继续向后传。",
+        "kind": "algorithm",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1201,
+            "endLine": 1254,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "恢复 PD、交接混合、普通 LQR 三种候选结果及各自生效条件。",
+            "process": "按前面互斥的选择条件取一条结果，不把三条力矩相加。",
+            "produces": "当前阶段的四路力矩。",
+            "decisions": [
+              "本图的多条输入表示候选路径；源码通过 if / else-if 选择其中之一。"
+            ]
+          }
+        },
+        "sceneId": "mode-detail"
+      },
+      "mode_air_check": {
+        "id": "mode_air_check",
+        "label": "现在是否离地？",
+        "description": "离地判断发生在阶段输出选择之后，可能再次覆盖刚才的结果。",
+        "kind": "decision",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 554,
+            "endLine": 562,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "上游给出的是否离地标志；其支撑力阈值、驻留和屏蔽规则见说明板。",
+            "process": "检查离地标志是否为真。",
+            "produces": "离地 → 悬空处理；未离地 → 接地/落地沿处理。",
+            "decisions": [
+              "离地 → 轮子不驱动，并检查是否改用空中腿角控制。",
+              "未离地 → 保留阶段输出；若刚落地，重置位置与航向参考。"
+            ]
+          }
+        },
+        "sceneId": "mode-detail"
+      },
+      "mode_air_apply": {
+        "id": "mode_air_apply",
+        "label": "离地时停轮并保持腿角",
+        "description": "没有地面支撑时，轮驱动清零，腿按悬空规则保持目标。",
+        "kind": "algorithm",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1267,
+            "endLine": 1283,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "阶段输出、是否离地、当前阶段、腿角目标和角度/角速度反馈。",
+            "process": "先将左右轮力矩清零。普通悬空时用腿角 PD 改写腿力矩并限幅，同时记录需要在落地沿重新锚定参考。",
+            "produces": "轮力矩为零、腿力矩按悬空规则处理后的四路结果。",
+            "decisions": [
+              "离地且不是翻身阶段（S7）→ 腿力矩改用悬空 PD。",
+              "离地且正在翻身 → 不覆盖翻身动作的腿力矩，轮仍为零。"
+            ]
+          }
+        },
+        "sceneId": "mode-detail"
+      },
+      "mode_ground": {
+        "id": "mode_ground",
+        "label": "接地时保留输出，落地沿重锚",
+        "description": "把空转造成的位置/航向参考漂移隔离在落地时处理。",
+        "kind": "algorithm",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1284,
+            "endLine": 1289,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "阶段输出、未离地的结果，以及是否记录过此前离地。",
+            "process": "力矩不再改写；如果是离地后的首次接地，就把位置和航向目标设为当前估计值，然后清除落地沿标志。",
+            "produces": "原阶段力矩；在落地沿另外更新位置与航向目标。",
+            "decisions": [
+              "此前离地、现在接地 → 重锚一次。",
+              "一直接地 → 直接保留输出，不反复重设目标。"
+            ]
+          }
+        },
+        "sceneId": "mode-detail"
+      },
+      "mode_output_gate": {
+        "id": "mode_output_gate",
+        "label": "是否允许向电机输出？",
+        "description": "最后一道等待门：条件未满足时，所有虚拟输出都清零。",
+        "kind": "decision",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1355,
+            "endLine": 1372,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "已完成阶段/离地处理的四路力矩、独立腿长力、当前阶段和翻身确认状态。",
+            "process": "检查是否还在等有效观测，或翻身动作尚未确认；满足等待条件就清零轮、腿摆动和腿长三个通道。",
+            "produces": "允许通过的轮力矩、腿摆动力矩和腿长力；或全部为零。",
+            "decisions": [
+              "初始化判定尚未结束（S0）→ 全部为零。",
+              "翻身等待（S7）但未确认 → 全部为零。",
+              "其余情况 → 保留前面结果，后续补偿也遵守该门控。"
+            ]
+          }
+        },
+        "sceneId": "mode-detail"
+      },
+      "mode_unpack": {
+        "id": "mode_unpack",
+        "label": "分送轮、腿和支撑输出",
+        "description": "把已通过门控的结果接到正确的执行支路。",
+        "kind": "note",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1362,
+            "endLine": 1375,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "最终四路力矩；腿长力通过独立通道传递。",
+            "process": "按既定顺序拆成左右轮一组、左右腿摆动力矩一组；图内整理不产生额外计算。",
+            "produces": "轮力矩送轮端处理；腿摆动力矩与腿长力送 VMC。",
+            "decisions": []
+          }
+        },
+        "sceneId": "mode-detail"
+      },
+      "boundary_input_startup-detail": {
+        "id": "boundary_input_startup-detail",
+        "label": "来自上层的输入",
+        "description": "把父功能块接收的数据带入这一层。",
+        "kind": "boundary-input",
+        "status": "design",
+        "sourceRefs": [],
+        "metadata": {
+          "explanation": {
+            "receives": "父功能块外部接收的输入；名称、类型、单位与父端口保持一致。",
+            "process": "边界仅表示接口对应关系，不计算、不复制创建新的控制行为。",
+            "produces": "作为本层的输出端口，供内部功能块连接。",
+            "decisions": []
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "boundary_output_startup-detail": {
+        "id": "boundary_output_startup-detail",
+        "label": "返回上层的输出",
+        "description": "把这一层处理完的数据交回父功能块。",
+        "kind": "boundary-output",
+        "status": "design",
+        "sourceRefs": [],
+        "metadata": {
+          "explanation": {
+            "receives": "内部节点送来的处理结果。",
+            "process": "边界仅表示接口对应关系，不计算、不复制创建新的控制行为。",
+            "produces": "送回父功能块对应的输出端口，供上层继续连接。",
+            "decisions": []
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_zero": {
+        "id": "startup_zero",
+        "label": "是否收到零力急停？",
+        "description": "先判断能不能继续本拍控制，避免急停时仍运行恢复动作。",
+        "kind": "decision",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 418,
+            "endLine": 482,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "命令层给出的底盘工作模式。",
+            "process": "检查工作模式是否为零力；零力表示让执行端停止主动出力。",
+            "produces": "是 → 停机并提前返回；否 → 继续阶段判断。",
+            "decisions": [
+              "工作模式是零力 → 提前返回。",
+              "非零力 → 本拍继续。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_return": {
+        "id": "startup_return",
+        "label": "停机并结束本拍",
+        "description": "本拍到这里就结束，不继续计算或下发后面的控制结果。",
+        "kind": "control",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 418,
+            "endLine": 482,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "零力急停成立的判定；另外保存恢复沿需要的模式锁存信息。",
+            "process": "设置电机停止标志并 return；切出零力时会清旧模式锁存，必要时重新做初始化判定。",
+            "produces": "本拍不再向后续控制链提供有效输出。",
+            "decisions": []
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_dispatch": {
+        "id": "startup_dispatch",
+        "label": "需要重新选择起立路线吗？",
+        "description": "只有初始化阶段需要从当前位形重新决定起立路线。",
+        "kind": "decision",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 638,
+            "endLine": 691,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "非零力条件和当前恢复阶段编号。",
+            "process": "检查是否处于初始化（S0）。已经在恢复或正常控制中的机器人，不每拍重做初始分选。",
+            "produces": "S0 → 等待有效观测并分选；非 S0 → 继续既有阶段。",
+            "decisions": [
+              "阶段为 S0 → 走初始姿态判断。",
+              "阶段不是 S0 → 走已有阶段的动作与转移。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_valid": {
+        "id": "startup_valid",
+        "label": "先等观测可信（S0）",
+        "description": "防止上电时读到尚未就绪的腿长，就立刻选择动作。",
+        "kind": "decision",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 638,
+            "endLine": 690,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "左右腿的实际长度，以及连续有效观测的计数。",
+            "process": "两条腿长度都必须大于 5 cm，连续达到约 50 ms；任意一条无效就清零计数。",
+            "produces": "观测已稳定的结果，或者继续等待的结果。",
+            "decisions": [
+              "两腿都 > 5 cm 且连续约 50 ms → 可以判断姿态。",
+              "一腿无效或时间不足 → 继续 S0，最终输出闸保持不出力。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_wait": {
+        "id": "startup_wait",
+        "label": "保持等待，不输出（S0）",
+        "description": "观测没准备好时不抢先执行起立动作。",
+        "kind": "control",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 638,
+            "endLine": 690,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "观测无效或连续有效时间不足的结果。",
+            "process": "维持初始化等待；不把短暂的错误长度当作起立依据。",
+            "produces": "当前阶段仍为 S0；最终门控清零轮、腿力矩和腿长力。",
+            "decisions": []
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_existing": {
+        "id": "startup_existing",
+        "label": "继续当前恢复阶段",
+        "description": "从保留的阶段继续执行，不把流程每拍重置到开头。",
+        "kind": "note",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 714,
+            "endLine": 1184,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "已经不是 S0 的恢复阶段，以及该阶段所需的目标与反馈。",
+            "process": "进入对应阶段的动作与退出判断；这里汇总的是已有状态流程，不是额外控制器。",
+            "produces": "本拍阶段处理后的阶段编号与相关标志。",
+            "decisions": []
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_tilt": {
+        "id": "startup_tilt",
+        "label": "机身是否明显翻倒？",
+        "description": "初始姿态分选的第一优先级：先识别明显翻倒。",
+        "kind": "decision",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 661,
+            "endLine": 665,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "机身俯仰角和横滚角，已经换成弧度。",
+            "process": "分别取两个角度的绝对值，与 1.2 rad（约 69°）比较。",
+            "produces": "是 → 翻身等待（S7）；否 → 再检查折叠姿态。",
+            "decisions": [
+              "俯仰或横滚任意一个绝对值 > 1.2 rad → S7。",
+              "两个都不超过阈值 → 继续下一条分选。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_fold": {
+        "id": "startup_fold",
+        "label": "是否适合折叠短路起立？",
+        "description": "腿已经收拢、轮心在机身下方时，优先走短路径转腿。",
+        "kind": "decision",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 666,
+            "endLine": 672,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "两腿平均长度、两腿相对机身的摆角，以及机身横滚角。",
+            "process": "检查是否同时满足短腿、两腿都在允许摆角内、侧倾不大的三个条件。",
+            "produces": "全部满足 → 折叠快转（S6）；否则 → 判断常规起立。",
+            "decisions": [
+              "平均腿长 < 0.13 m、两腿摆角绝对值都 < 0.85 rad、横滚绝对值 < 0.6 rad，三项全满足 → S6。",
+              "任一不满足 → 继续检查常规起立，不能只凭腿短就走此路线。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_prone": {
+        "id": "startup_prone",
+        "label": "是否需要完整起立流程？",
+        "description": "排除翻倒和折叠短路后，再判断机器人是否已经适合正常控制。",
+        "kind": "decision",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 673,
+            "endLine": 684,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "平均腿长、两腿机身系摆角、机身俯仰和横滚。",
+            "process": "检查长度过短、腿偏离竖直过大或机身倾斜过大的任一条件。",
+            "produces": "需要恢复 → 腿长整理（S1）；都不需要 → 起立/正常控制（S5）。",
+            "decisions": [
+              "平均腿长 < 0.13 m；或任一腿摆角绝对值 > 0.6 rad；或俯仰 > 0.5 rad；或横滚 > 0.6 rad（均取绝对值），任一成立 → S1。",
+              "以上全部不成立 → S5。此规则只在 S0 分选时执行。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_s1": {
+        "id": "startup_s1",
+        "label": "整理双腿长度（S1）",
+        "description": "先把腿长整理到站立目标，为后面的两腿对齐准备位形。",
+        "kind": "control",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 809,
+            "endLine": 852,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "左右腿实际长度、站立目标长度，以及进入本阶段时的腿摆角。",
+            "process": "目标长度从当前实际值逐步逼近 0.25 m；腿摆角锚定保持。每拍检查两腿长度是否都接近目标。",
+            "produces": "连续变化的左右腿长目标、保持的摆角目标，以及下一阶段选择。",
+            "decisions": [
+              "阶段用时 > 8 s → 转入翻身等待 S7 并取消武装。",
+              "未超时，两腿长度误差都 < 3 cm 并连续保持 0.5 s → 双腿对齐 S2。",
+              "其余 → 继续整理；一条腿误差出带就清零达标计时。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_s2": {
+        "id": "startup_s2",
+        "label": "把两腿转到一致摆角（S2）",
+        "description": "用规定方向对齐两腿，避免两腿从不同位置开始蹬地。",
+        "kind": "control",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 854,
+            "endLine": 900,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "两腿连续机身系摆角、各自的对齐目标，以及达标时间。",
+            "process": "比较按规定方向转到目标的路程，以路程短的一腿作锚；另一腿追赶到相同摆角。",
+            "produces": "两腿对齐过程的目标角；完成后选择蹬地阶段 S3。",
+            "decisions": [
+              "阶段用时 > 8 s → 翻身等待 S7。",
+              "未超时，两腿目标角误差都 < 0.10 rad（约 5.7°）并保持 0.5 s → S3。",
+              "其余 → 继续对齐；任一角误差出带就清零达标计时。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_s3": {
+        "id": "startup_s3",
+        "label": "蹬地抬起机身（S3）",
+        "description": "让两腿协同转到交接角，同时按角度联动收腿。",
+        "kind": "control",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 902,
+            "endLine": 979,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "两腿目标/实际摆角、当前长度、达标时间与阶段用时。",
+            "process": "以追赶式摆角目标推动机身，同时限速收腿；退出判断只看腿角和驻留，不额外等腿长到位。",
+            "produces": "本拍腿角/腿长目标，以及是否转入平衡接管的结果。",
+            "decisions": [
+              "阶段用时 > 8 s → 翻身等待 S7；这一超时处理会覆盖本拍的到位转移结果。",
+              "未超时，两腿角误差都 < 0.10 rad 并连续保持 0.5 s → 平衡接管 S4，同时把交接比例清零。",
+              "其余 → 继续蹬地；任一腿角误差出带，达标时间重新累计。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_s4": {
+        "id": "startup_s4",
+        "label": "平滑进入平衡控制（S4）",
+        "description": "用一段渐变交接，避免恢复控制突然撤掉而平衡控制尚未接上。",
+        "kind": "control",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1027,
+            "endLine": 1069,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "进入时的实际位置、航向、腿角，以及交接经过的时间。",
+            "process": "先锚定参考值并重启接地检测静默期；保持低腿长，将交接比例在约 0.4 s 内从 0 增到 1。",
+            "produces": "保持的参考目标、低位腿长和交接比例；比例用于外层 PD/LQR 混合。",
+            "decisions": [
+              "比例达到 1 → 起立/正常控制 S5。",
+              "未达到 1 → 留在 S4，持续平滑混合。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_s5": {
+        "id": "startup_s5",
+        "label": "站起并保持正常控制（S5）",
+        "description": "平衡已经接管，再逐步升高并交给正常遥控控制。",
+        "kind": "control",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1071,
+            "endLine": 1139,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "实际腿长、起立高度、锚定腿角和遥控腿长挡位。",
+            "process": "腿长从低位逐步升起，腿角目标缓慢收零；完成起立后再跟随遥控高度，减少切换阶跃。",
+            "produces": "正常平衡期间持续更新的目标；没有一个“完成就结束任务”的返回动作。",
+            "decisions": [
+              "起立高度尚未达到 → 继续爬升，不立刻跳到遥控高度。",
+              "到顶并满足接管逻辑 → 目标跟随遥控腿长挡位。",
+              "运行中翻倒监控只有开关开启才可能触发 S7；当前源码默认关闭。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_s6": {
+        "id": "startup_s6",
+        "label": "折叠姿态下短路径转腿（S6）",
+        "description": "已经收拢的腿直接短转到交接角，省去完整伸腿与对齐路线。",
+        "kind": "control",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 981,
+            "endLine": 1025,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "当前两腿摆角、交接目标角、达标时间和阶段用时。",
+            "process": "允许最短/反向转动到目标；腿长保持低位，不先做伸腿顶升。",
+            "produces": "短转过程的摆角目标与固定低腿长目标。",
+            "decisions": [
+              "阶段用时 > 8 s → 翻身等待 S7。",
+              "未超时，两腿角误差都 < 0.10 rad 并保持 0.5 s → 平衡接管 S4。",
+              "其余 → 继续转到目标，达标时间按连续满足条件计算。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_s7": {
+        "id": "startup_s7",
+        "label": "等待确认后翻身（S7）",
+        "description": "翻倒后先等待确认，确认后才执行翻身动作。",
+        "kind": "control",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 714,
+            "endLine": 777,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "是否经历零力再切出、当前机身/腿部姿态，以及翻身动作的时间。",
+            "process": "未确认时不出力；确认后伸腿造支点并按追赶式角度目标摆腿，持续检查是否翻正。",
+            "produces": "等待或翻身所需的目标；翻正后接回腿长整理 S1。",
+            "decisions": [
+              "未确认 → 保持 S7 并由最终门控清零输出。",
+              "确认后，俯仰绝对值 < 0.3 rad、两腿摆角绝对值都 < 1.2 rad，连续保持 0.5 s → S1。",
+              "仍未满足翻正退出、动作时间又 > 8 s → 清武装并留在 S7 等待新确认，不能自动再次启动。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_monitor": {
+        "id": "startup_monitor",
+        "label": "运行中是否触发翻倒保护？",
+        "description": "这是正常控制中的额外监控，不是上电 S0 的姿态分选。",
+        "kind": "decision",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1155,
+            "endLine": 1184,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "监控开关、当前阶段、两腿有效长度和机身系腿摆角。",
+            "process": "只有开关开启且在 S4/S5 才累计越界时间；任一腿摆角持续越界则转入翻身等待并清确认。",
+            "produces": "保护触发的状态转移，或保持当前阶段。",
+            "decisions": [
+              "当前源码 prot_enable=0 → 整段监控不运行。",
+              "开启后，在 S4/S5 且两腿长度有效，任一摆角绝对值 > 1.3 rad 连续约 0.2 s → S7。",
+              "不满足阶段或越界条件 → 不触发；越界计数按代码清零。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "startup_state": {
+        "id": "startup_state",
+        "label": "记录本拍的阶段结果",
+        "description": "把判定与阶段动作对同一组状态变量的影响交给上层使用。",
+        "kind": "note",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 638,
+            "endLine": 1188,
+            "symbol": "ChassisTask",
+            "revision": "a7d8f90"
+          }
+        ],
+        "metadata": {
+          "evidence": "2026-11-17 源码核对，非本轮实车验证",
+          "explanation": {
+            "receives": "当前有效的阶段编号、翻身确认和离地标志；多条线表示带条件的候选来源。",
+            "process": "按真实阶段取对应结果，不把多个阶段同时执行，也不把编号相加。",
+            "produces": "给上层控制选择使用的阶段/确认/离地信息。",
+            "decisions": [
+              "图是代码逻辑说明，不在浏览器执行控制，也不是逐周期仿真。"
+            ]
+          }
+        },
+        "sceneId": "startup-detail"
+      },
+      "guide_root": {
+        "id": "guide_root",
+        "label": "先读：这条平衡链路怎样工作",
+        "description": "## 从传感器到电机\n\n1. **状态观测**回答“车现在是什么样”：位置、速度、姿态、腿角和腿长。\n2. **控制目标**回答“希望车变成什么样”：行驶速度、位置、航向、腿角和高度。\n3. **十维状态反馈（LQR）**比较实际与目标，先算出左右轮、左右腿的四路纠偏力矩。\n4. **模式处理**决定当前能否使用这些力矩：恢复时改用腿角控制，交接时平滑混合，离地后再次覆盖，等待时清零。\n5. **轮端处理 / VMC 与关节执行**把允许使用的结果分配、补偿并转换为电机参考值。\n\n### 怎样读每个功能块\n\n- **接收**：从哪里得到什么量，量的物理含义是什么。\n- **处理**：如何改变这些量、为什么需要这样处理。\n- **输出**：交给下一块什么结果，哪些值会被改写。\n- **判定**：什么条件成立时走哪条路；条件按列出的优先级理解。\n\n双击没有子视图的节点标题可放大阅读；有子视图的节点会进入下一层。点源码位置可对照代码。\n\n> 说明板用于解释，不参与数据或控制。图由维护者根据 a7d8f90 手工整理，本轮没有运行或验证机器人动作。",
+        "kind": "annotation",
+        "status": "design",
+        "sourceRefs": [],
+        "metadata": {
+          "boardTone": "amber"
+        },
+        "sceneId": "root"
+      },
+      "terms_root": {
+        "id": "terms_root",
+        "label": "符号、单位与连线图例",
+        "description": "## 先把这些量分清\n\n| 符号 | 含义 | 单位 |\n| --- | --- | --- |\n| s / ds | 水平位置 / 前进速度 | m / m·s⁻¹ |\n| yaw / dyaw | 航向角 / 转向角速度 | rad / rad·s⁻¹ |\n| 左右 θ / dθ | 两腿摆角 / 摆动角速度 | rad / rad·s⁻¹ |\n| φ / dφ | 机身俯仰角 / 俯仰角速度 | rad / rad·s⁻¹ |\n| Tw | 让轮子驱动的力矩，左右各一条 | N·m |\n| Tp | 让整条腿摆动的力矩，左右各一条 | N·m |\n| F_leg | 沿腿伸缩方向的力，左右各一条 | N |\n| K | 把十个状态误差映射成四路力矩的系数表 | 4×10 矩阵 |\n\n### 线代表什么\n\n- **数据**：状态、目标或观测值传递。\n- **判定**：条件检查得到的分支结果。\n- **虚线状态转移**：满足条件后切换恢复阶段。\n- **力 / 力矩**：实际控制量通道。\n\n图中的“观测包”“腿角目标”等是为了阅读而整理的接口别名，不表示固件新增了同名结构体或函数。字段的真实来源看源码引用。\n\n**坐标系要看定义。** 恢复控制使用机身系腿角，悬空控制与 LQR 使用各自匹配的目标和反馈；不能因都叫 θ 就混用。",
+        "kind": "annotation",
+        "status": "design",
+        "sourceRefs": [],
+        "metadata": {
+          "boardTone": "slate"
+        },
+        "sceneId": "root"
+      },
+      "guide_mode": {
+        "id": "guide_mode",
+        "label": "先读：恢复、交接和正常控制有什么区别",
+        "description": "## 为什么不能一直使用同一套输出？\n\n| 当前情况 | 使用什么控制 | 原因与结果 |\n| --- | --- | --- |\n| 整理腿长、对齐、蹬地、折叠快转，或已确认的翻身 | 恢复腿角 PD | 腿按恢复目标摆动，轮暂时不驱动。 |\n| 平衡接管阶段（S4） | PD 与 LQR 渐变混合 | 保持支撑连续，让 LQR 平滑接上。 |\n| 不属于前两类 | 先保留原始 LQR | 还要经过后面的离地与等待检查，才决定是否放行。 |\n\n**PD**：角度偏差越大，纠偏力矩越大；角速度项抑制摆动。\n\n**LQR**：把位置、速度、腿角、机身姿态等十个误差综合成四路力矩。\n\n**S0～S7**：本项目的恢复阶段编号。它与遥控“行驶/锁定/零力”工作模式、以及“接地/离地”标志是三类不同信息。状态含义在下一层说明板中解释。\n\n进入“模式判定与状态转换”可以先看状态如何得到，再回来读各阶段怎样影响输出。",
+        "kind": "annotation",
+        "status": "design",
+        "sourceRefs": [],
+        "metadata": {
+          "boardTone": "amber"
+        },
+        "sceneId": "mode-detail"
+      },
+      "mode_order": {
+        "id": "mode_order",
+        "label": "输出覆盖的顺序与优先级",
+        "description": "## 沿这四步读\n\n1. **先选阶段控制**：恢复 PD、平滑交接、普通反馈三者取一，不相加。\n2. **再检查是否离地**：这是后续独立检查，可以再次改写第 1 步的结果。\n3. **最后检查输出许可**：还在等有效观测（S0），或翻身未确认（S7）时，轮/腿力矩与腿长力全部清零。\n4. **送往执行支路**：轮端和关节的补偿也必须遵守对应门控。\n\n### 离地时具体发生什么\n\n- 轮子：力矩清零。\n- 普通悬空：腿摆动力矩改用悬空 PD。\n- 翻身动作：保留翻身的腿力矩语义，不再被悬空腿角控制覆盖。\n- 腿长力：仍有长度误差控制，但关闭重力前馈和横滚补偿。\n- 首次重新接地：把位置/航向目标重锚到当前值，处理空转留下的参考漂移。\n\n“收纳四路力矩”和“分送输出”是图内整理接口；它们不代表源码里又做了一次控制计算。",
+        "kind": "annotation",
+        "status": "design",
+        "sourceRefs": [],
+        "metadata": {
+          "boardTone": "teal"
+        },
+        "sceneId": "mode-detail"
+      },
+      "state_legend": {
+        "id": "state_legend",
+        "label": "先读：S0～S7 分别负责什么",
+        "description": "## 这是恢复阶段编号\n\n编号表示机器人当前恢复流程进行到哪一步，不表示遥控开关挡位，也不表示接地状态。\n\n| 编号 | 中文含义 | 主要任务 / 怎样离开 |\n| --- | --- | --- |\n| S0 | 初始化等待与位形分选 | 等观测可信，再选择翻身等待、折叠快转、常规起立或直接正常控制。 |\n| S1 | 整理双腿长度 | 长度逐渐到约 25 cm；两腿误差均在允许范围并驻留后去 S2。 |\n| S2 | 两腿摆角对齐 | 按规定方向把两腿转到一致摆角；两腿角度到位并驻留后去 S3。 |\n| S3 | 蹬地抬起机身 | 两腿协同顶升并联动收腿；腿角到位并驻留后去 S4，不额外等待腿长到位。 |\n| S4 | 平滑进入平衡控制 | PD 退出、LQR 接入，约 0.4 s 后去 S5。 |\n| S5 | 站起并正常控制 | 在平衡控制下升高，完成后跟随正常目标；不会因“完成”而结束整个控制任务。 |\n| S6 | 折叠姿态短路起立 | 保持低腿长，允许最短/反向转腿；到位并驻留后直接去 S4。 |\n| S7 | 翻身等待与动作 | 先等确认再动作；翻正并驻留后回 S1；未确认时不出力。 |\n\n### 两个容易混淆的入口\n\n- **上电位形分选**：S0 发现明显翻倒，可进入 S7。\n- **运行中翻倒监控**：另受开关控制，当前源码默认关闭；不能看见这块代码就认为运行中一定自动触发。\n\n这是当前源码的逻辑说明，不构成实车动作已验证的结论。",
+        "kind": "annotation",
+        "status": "design",
+        "sourceRefs": [],
+        "metadata": {
+          "boardTone": "amber"
+        },
+        "sceneId": "startup-detail"
+      },
+      "state_rules": {
+        "id": "state_rules",
+        "label": "初始判定、驻留和超时怎么读",
+        "description": "## 初始化时按顺序分选\n\n先要求两腿长度都大于 5 cm 并连续有效约 50 ms，然后依次检查：\n\n1. 俯仰或横滚绝对值超过 1.2 rad（约 69°）→ **S7 翻身等待**。\n2. 平均腿长 < 13 cm，且两腿机身系摆角都 < 0.85 rad，且横滚 < 0.6 rad（角度均取绝对值）→ **S6 折叠快转**。\n3. 平均腿长 < 13 cm，或一腿摆角 > 0.6 rad，或俯仰 > 0.5 rad，或横滚 > 0.6 rad → **S1 常规起立**。\n4. 以上都不成立 → **S5 正常控制**。\n\n### 驻留 = 连续满足，不是累计凑够\n\n一条腿本拍不达标，计时就清零，下一拍重新累计。这样可避免只碰到一下目标就切换阶段。\n\n| 条件 | 当前值 / 用途 |\n| --- | --- |\n| S1 腿长误差带 | 每腿 < 3 cm |\n| S2/S3/S6 腿角误差带 | 每腿 < 0.10 rad，约 5.7° |\n| 到位驻留 | 连续约 0.5 s |\n| 常规恢复阶段超时 | 大于约 8 s，转 S7 并等确认 |\n| S4 交接时长 | 约 0.4 s |\n\n这些数值来自当前源码参数，不在这张图上执行。参数修改后，维护者需要核对并更新说明。",
+        "kind": "annotation",
+        "status": "design",
+        "sourceRefs": [],
+        "metadata": {
+          "boardTone": "slate"
+        },
+        "sceneId": "startup-detail"
+      }
+    },
+    "ports": {
+      "obs_x": {
+        "id": "obs_x",
+        "nodeId": "observe",
+        "direction": "output",
+        "label": "x [10]",
+        "dataType": "float",
+        "unit": "",
+        "shape": "10",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "obs_l": {
+        "id": "obs_l",
+        "nodeId": "observe",
+        "direction": "output",
+        "label": "L_l / L_r",
+        "dataType": "float",
+        "unit": "m",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "target_x": {
+        "id": "target_x",
+        "nodeId": "target",
+        "direction": "output",
+        "label": "x_ref [10]",
+        "dataType": "float",
+        "unit": "",
+        "shape": "10",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "gain_l": {
+        "id": "gain_l",
+        "nodeId": "gain",
+        "direction": "input",
+        "label": "平均腿长输入",
+        "dataType": "float",
+        "unit": "m",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "gain_k": {
+        "id": "gain_k",
+        "nodeId": "gain",
+        "direction": "output",
+        "label": "K [4×10]",
+        "dataType": "float",
+        "unit": "",
+        "shape": "4x10",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "air_flag": {
+        "id": "air_flag",
+        "nodeId": "air",
+        "direction": "output",
+        "label": "是否离地",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_flag": {
+        "id": "mode_flag",
+        "nodeId": "air",
+        "direction": "output",
+        "label": "恢复阶段 / 确认 / 离地",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "lqr_x": {
+        "id": "lqr_x",
+        "nodeId": "lqr",
+        "direction": "input",
+        "label": "x [10]",
+        "dataType": "float",
+        "unit": "",
+        "shape": "10",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "lqr_ref": {
+        "id": "lqr_ref",
+        "nodeId": "lqr",
+        "direction": "input",
+        "label": "x_ref [10]",
+        "dataType": "float",
+        "unit": "",
+        "shape": "10",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "lqr_k": {
+        "id": "lqr_k",
+        "nodeId": "lqr",
+        "direction": "input",
+        "label": "K",
+        "dataType": "float",
+        "unit": "",
+        "shape": "4x10",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "lqr_air": {
+        "id": "lqr_air",
+        "nodeId": "lqr",
+        "direction": "input",
+        "label": "是否离地",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 3,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "lqr_l_Tw": {
+        "id": "lqr_l_Tw",
+        "nodeId": "lqr",
+        "direction": "output",
+        "label": "l_Tw",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_l_Tw": {
+        "id": "mode_l_Tw",
+        "nodeId": "mode",
+        "direction": "input",
+        "label": "l_Tw",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "lqr_r_Tw": {
+        "id": "lqr_r_Tw",
+        "nodeId": "lqr",
+        "direction": "output",
+        "label": "r_Tw",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_r_Tw": {
+        "id": "mode_r_Tw",
+        "nodeId": "mode",
+        "direction": "input",
+        "label": "r_Tw",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "lqr_l_Tp": {
+        "id": "lqr_l_Tp",
+        "nodeId": "lqr",
+        "direction": "output",
+        "label": "l_Tp",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_l_Tp": {
+        "id": "mode_l_Tp",
+        "nodeId": "mode",
+        "direction": "input",
+        "label": "l_Tp",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "lqr_r_Tp": {
+        "id": "lqr_r_Tp",
+        "nodeId": "lqr",
+        "direction": "output",
+        "label": "r_Tp",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 3,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_r_Tp": {
+        "id": "mode_r_Tp",
+        "nodeId": "mode",
+        "direction": "input",
+        "label": "r_Tp",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 3,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_in": {
+        "id": "mode_in",
+        "nodeId": "mode",
+        "direction": "input",
+        "label": "恢复阶段 / 确认 / 离地",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 4,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_tw": {
+        "id": "mode_tw",
+        "nodeId": "mode",
+        "direction": "output",
+        "label": "Tw_l / Tw_r",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_tp": {
+        "id": "mode_tp",
+        "nodeId": "mode",
+        "direction": "output",
+        "label": "Tp_l / Tp_r",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_f_in": {
+        "id": "mode_f_in",
+        "nodeId": "mode",
+        "direction": "input",
+        "label": "F_leg,l / F_leg,r",
+        "dataType": "float",
+        "unit": "N",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 5,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_f_out": {
+        "id": "mode_f_out",
+        "nodeId": "mode",
+        "direction": "output",
+        "label": "F_leg,l / F_leg,r",
+        "dataType": "float",
+        "unit": "N",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "wheel_tw": {
+        "id": "wheel_tw",
+        "nodeId": "wheel",
+        "direction": "input",
+        "label": "Tw_l / Tw_r",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "wheel_out": {
+        "id": "wheel_out",
+        "nodeId": "wheel",
+        "direction": "output",
+        "label": "左右轮电机指令",
+        "dataType": "float",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "force_out": {
+        "id": "force_out",
+        "nodeId": "force",
+        "direction": "output",
+        "label": "F_leg,l / F_leg,r",
+        "dataType": "float",
+        "unit": "N",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "vmc_tp": {
+        "id": "vmc_tp",
+        "nodeId": "vmc",
+        "direction": "input",
+        "label": "Tp_l / Tp_r",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "vmc_f": {
+        "id": "vmc_f",
+        "nodeId": "vmc",
+        "direction": "input",
+        "label": "F_leg,l / F_leg,r",
+        "dataType": "float",
+        "unit": "N",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "vmc_out": {
+        "id": "vmc_out",
+        "nodeId": "vmc",
+        "direction": "output",
+        "label": "四关节电机指令",
+        "dataType": "float",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "binding_mode_l_Tw": {
+        "id": "binding_mode_l_Tw",
+        "nodeId": "boundary_input_mode-detail",
+        "direction": "output",
+        "label": "l_Tw",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many",
+        "parentPortId": "mode_l_Tw"
+      },
+      "binding_mode_r_Tw": {
+        "id": "binding_mode_r_Tw",
+        "nodeId": "boundary_input_mode-detail",
+        "direction": "output",
+        "label": "r_Tw",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many",
+        "parentPortId": "mode_r_Tw"
+      },
+      "binding_mode_l_Tp": {
+        "id": "binding_mode_l_Tp",
+        "nodeId": "boundary_input_mode-detail",
+        "direction": "output",
+        "label": "l_Tp",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many",
+        "parentPortId": "mode_l_Tp"
+      },
+      "binding_mode_r_Tp": {
+        "id": "binding_mode_r_Tp",
+        "nodeId": "boundary_input_mode-detail",
+        "direction": "output",
+        "label": "r_Tp",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many",
+        "parentPortId": "mode_r_Tp"
+      },
+      "binding_mode_in": {
+        "id": "binding_mode_in",
+        "nodeId": "boundary_input_mode-detail",
+        "direction": "output",
+        "label": "恢复阶段 / 确认 / 离地",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many",
+        "parentPortId": "mode_in"
+      },
+      "binding_mode_tw": {
+        "id": "binding_mode_tw",
+        "nodeId": "boundary_output_mode-detail",
+        "direction": "input",
+        "label": "Tw_l / Tw_r",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one",
+        "parentPortId": "mode_tw"
+      },
+      "binding_mode_tp": {
+        "id": "binding_mode_tp",
+        "nodeId": "boundary_output_mode-detail",
+        "direction": "input",
+        "label": "Tp_l / Tp_r",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one",
+        "parentPortId": "mode_tp"
+      },
+      "binding_mode_f_in": {
+        "id": "binding_mode_f_in",
+        "nodeId": "boundary_input_mode-detail",
+        "direction": "output",
+        "label": "F_leg,l / F_leg,r",
+        "dataType": "float",
+        "unit": "N",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many",
+        "parentPortId": "mode_f_in"
+      },
+      "binding_mode_f_out": {
+        "id": "binding_mode_f_out",
+        "nodeId": "boundary_output_mode-detail",
+        "direction": "input",
+        "label": "F_leg,l / F_leg,r",
+        "dataType": "float",
+        "unit": "N",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one",
+        "parentPortId": "mode_f_out"
+      },
+      "mode_classify_ctx": {
+        "id": "mode_classify_ctx",
+        "nodeId": "mode_classify",
+        "direction": "input",
+        "label": "状态 / armed / air",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_classify_out": {
+        "id": "mode_classify_out",
+        "nodeId": "mode_classify",
+        "direction": "output",
+        "label": "当前模式上下文",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_pack_l_Tw": {
+        "id": "mode_pack_l_Tw",
+        "nodeId": "mode_pack",
+        "direction": "input",
+        "label": "l_Tw",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_pack_r_Tw": {
+        "id": "mode_pack_r_Tw",
+        "nodeId": "mode_pack",
+        "direction": "input",
+        "label": "r_Tw",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_pack_l_Tp": {
+        "id": "mode_pack_l_Tp",
+        "nodeId": "mode_pack",
+        "direction": "input",
+        "label": "l_Tp",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_pack_r_Tp": {
+        "id": "mode_pack_r_Tp",
+        "nodeId": "mode_pack",
+        "direction": "input",
+        "label": "r_Tp",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 3,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_pack_out": {
+        "id": "mode_pack_out",
+        "nodeId": "mode_pack",
+        "direction": "output",
+        "label": "四路力矩",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_branch_ctx": {
+        "id": "mode_branch_ctx",
+        "nodeId": "mode_branch",
+        "direction": "input",
+        "label": "状态 / armed / air",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_branch_pd": {
+        "id": "mode_branch_pd",
+        "nodeId": "mode_branch",
+        "direction": "output",
+        "label": "恢复 PD",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_branch_ramp": {
+        "id": "mode_branch_ramp",
+        "nodeId": "mode_branch",
+        "direction": "output",
+        "label": "S4 交接",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_branch_normal": {
+        "id": "mode_branch_normal",
+        "nodeId": "mode_branch",
+        "direction": "output",
+        "label": "其余",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_pd_select": {
+        "id": "mode_pd_select",
+        "nodeId": "mode_pd",
+        "direction": "input",
+        "label": "选择",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_pd_out": {
+        "id": "mode_pd_out",
+        "nodeId": "mode_pd",
+        "direction": "output",
+        "label": "四路力矩",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_ramp_u": {
+        "id": "mode_ramp_u",
+        "nodeId": "mode_ramp",
+        "direction": "input",
+        "label": "四路力矩",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_ramp_select": {
+        "id": "mode_ramp_select",
+        "nodeId": "mode_ramp",
+        "direction": "input",
+        "label": "选择",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_ramp_out": {
+        "id": "mode_ramp_out",
+        "nodeId": "mode_ramp",
+        "direction": "output",
+        "label": "四路力矩",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_keep_u": {
+        "id": "mode_keep_u",
+        "nodeId": "mode_keep",
+        "direction": "input",
+        "label": "四路力矩",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_keep_select": {
+        "id": "mode_keep_select",
+        "nodeId": "mode_keep",
+        "direction": "input",
+        "label": "选择",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_keep_out": {
+        "id": "mode_keep_out",
+        "nodeId": "mode_keep",
+        "direction": "output",
+        "label": "四路力矩",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_merge_u": {
+        "id": "mode_merge_u",
+        "nodeId": "mode_merge",
+        "direction": "input",
+        "label": "所选分支输出",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_merge_out": {
+        "id": "mode_merge_out",
+        "nodeId": "mode_merge",
+        "direction": "output",
+        "label": "四路力矩",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_air_check_ctx": {
+        "id": "mode_air_check_ctx",
+        "nodeId": "mode_air_check",
+        "direction": "input",
+        "label": "状态 / armed / air",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_air_check_yes": {
+        "id": "mode_air_check_yes",
+        "nodeId": "mode_air_check",
+        "direction": "output",
+        "label": "悬空",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_air_check_no": {
+        "id": "mode_air_check_no",
+        "nodeId": "mode_air_check",
+        "direction": "output",
+        "label": "接地",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_air_apply_u": {
+        "id": "mode_air_apply_u",
+        "nodeId": "mode_air_apply",
+        "direction": "input",
+        "label": "四路力矩",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_air_apply_select": {
+        "id": "mode_air_apply_select",
+        "nodeId": "mode_air_apply",
+        "direction": "input",
+        "label": "air 成立",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_air_apply_out": {
+        "id": "mode_air_apply_out",
+        "nodeId": "mode_air_apply",
+        "direction": "output",
+        "label": "四路力矩",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_ground_u": {
+        "id": "mode_ground_u",
+        "nodeId": "mode_ground",
+        "direction": "input",
+        "label": "四路力矩",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_ground_select": {
+        "id": "mode_ground_select",
+        "nodeId": "mode_ground",
+        "direction": "input",
+        "label": "air 不成立",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_ground_out": {
+        "id": "mode_ground_out",
+        "nodeId": "mode_ground",
+        "direction": "output",
+        "label": "四路力矩",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_output_gate_u": {
+        "id": "mode_output_gate_u",
+        "nodeId": "mode_output_gate",
+        "direction": "input",
+        "label": "悬空处理后输出",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_output_gate_ctx": {
+        "id": "mode_output_gate_ctx",
+        "nodeId": "mode_output_gate",
+        "direction": "input",
+        "label": "状态 / armed / air",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_output_gate_out": {
+        "id": "mode_output_gate_out",
+        "nodeId": "mode_output_gate",
+        "direction": "output",
+        "label": "四路力矩",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_output_gate_force_in": {
+        "id": "mode_output_gate_force_in",
+        "nodeId": "mode_output_gate",
+        "direction": "input",
+        "label": "独立腿长力",
+        "dataType": "float",
+        "unit": "N",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_output_gate_force_out": {
+        "id": "mode_output_gate_force_out",
+        "nodeId": "mode_output_gate",
+        "direction": "output",
+        "label": "门控后腿长力",
+        "dataType": "float",
+        "unit": "N",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_unpack_u": {
+        "id": "mode_unpack_u",
+        "nodeId": "mode_unpack",
+        "direction": "input",
+        "label": "四路力矩",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_unpack_tw": {
+        "id": "mode_unpack_tw",
+        "nodeId": "mode_unpack",
+        "direction": "output",
+        "label": "Tw_l / Tw_r",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_unpack_tp": {
+        "id": "mode_unpack_tp",
+        "nodeId": "mode_unpack",
+        "direction": "output",
+        "label": "Tp_l / Tp_r",
+        "dataType": "float",
+        "unit": "N·m",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "binding_mode_classify_ctx": {
+        "id": "binding_mode_classify_ctx",
+        "nodeId": "boundary_input_startup-detail",
+        "direction": "output",
+        "label": "状态 / armed / air",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many",
+        "parentPortId": "mode_classify_ctx"
+      },
+      "binding_mode_classify_out": {
+        "id": "binding_mode_classify_out",
+        "nodeId": "boundary_output_startup-detail",
+        "direction": "input",
+        "label": "当前模式上下文",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one",
+        "parentPortId": "mode_classify_out"
+      },
+      "startup_zero_ctx": {
+        "id": "startup_zero_ctx",
+        "nodeId": "startup_zero",
+        "direction": "input",
+        "label": "状态 / armed / air",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "startup_zero_yes": {
+        "id": "startup_zero_yes",
+        "nodeId": "startup_zero",
+        "direction": "output",
+        "label": "零力",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_zero_no": {
+        "id": "startup_zero_no",
+        "nodeId": "startup_zero",
+        "direction": "output",
+        "label": "非零力",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_return_in": {
+        "id": "startup_return_in",
+        "nodeId": "startup_return",
+        "direction": "input",
+        "label": "判定输入",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "startup_dispatch_in": {
+        "id": "startup_dispatch_in",
+        "nodeId": "startup_dispatch",
+        "direction": "input",
+        "label": "判定输入",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "startup_dispatch_detect": {
+        "id": "startup_dispatch_detect",
+        "nodeId": "startup_dispatch",
+        "direction": "output",
+        "label": "S0",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_dispatch_existing": {
+        "id": "startup_dispatch_existing",
+        "nodeId": "startup_dispatch",
+        "direction": "output",
+        "label": "已有状态",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_valid_in": {
+        "id": "startup_valid_in",
+        "nodeId": "startup_valid",
+        "direction": "input",
+        "label": "判定输入",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "startup_valid_ready": {
+        "id": "startup_valid_ready",
+        "nodeId": "startup_valid",
+        "direction": "output",
+        "label": "达到有效期",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_valid_waiting": {
+        "id": "startup_valid_waiting",
+        "nodeId": "startup_valid",
+        "direction": "output",
+        "label": "继续等待",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_wait_in": {
+        "id": "startup_wait_in",
+        "nodeId": "startup_wait",
+        "direction": "input",
+        "label": "判定输入",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "startup_wait_state": {
+        "id": "startup_wait_state",
+        "nodeId": "startup_wait",
+        "direction": "output",
+        "label": "当前状态 S0",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_existing_in": {
+        "id": "startup_existing_in",
+        "nodeId": "startup_existing",
+        "direction": "input",
+        "label": "判定输入",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "startup_existing_state": {
+        "id": "startup_existing_state",
+        "nodeId": "startup_existing",
+        "direction": "output",
+        "label": "既有模式上下文",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_tilt_in": {
+        "id": "startup_tilt_in",
+        "nodeId": "startup_tilt",
+        "direction": "input",
+        "label": "判定输入",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "startup_tilt_yes": {
+        "id": "startup_tilt_yes",
+        "nodeId": "startup_tilt",
+        "direction": "output",
+        "label": "是 → S7",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_tilt_no": {
+        "id": "startup_tilt_no",
+        "nodeId": "startup_tilt",
+        "direction": "output",
+        "label": "否",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_fold_in": {
+        "id": "startup_fold_in",
+        "nodeId": "startup_fold",
+        "direction": "input",
+        "label": "判定输入",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "startup_fold_yes": {
+        "id": "startup_fold_yes",
+        "nodeId": "startup_fold",
+        "direction": "output",
+        "label": "是 → S6",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_fold_no": {
+        "id": "startup_fold_no",
+        "nodeId": "startup_fold",
+        "direction": "output",
+        "label": "否",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_prone_in": {
+        "id": "startup_prone_in",
+        "nodeId": "startup_prone",
+        "direction": "input",
+        "label": "判定输入",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "startup_prone_yes": {
+        "id": "startup_prone_yes",
+        "nodeId": "startup_prone",
+        "direction": "output",
+        "label": "是 → S1",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_prone_no": {
+        "id": "startup_prone_no",
+        "nodeId": "startup_prone",
+        "direction": "output",
+        "label": "否 → S5",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s1_enter": {
+        "id": "startup_s1_enter",
+        "nodeId": "startup_s1",
+        "direction": "input",
+        "label": "进入 / 转移",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s1_state": {
+        "id": "startup_s1_state",
+        "nodeId": "startup_s1",
+        "direction": "output",
+        "label": "当前状态 S1",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s2_enter": {
+        "id": "startup_s2_enter",
+        "nodeId": "startup_s2",
+        "direction": "input",
+        "label": "进入 / 转移",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s2_state": {
+        "id": "startup_s2_state",
+        "nodeId": "startup_s2",
+        "direction": "output",
+        "label": "当前状态 S2",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s3_enter": {
+        "id": "startup_s3_enter",
+        "nodeId": "startup_s3",
+        "direction": "input",
+        "label": "进入 / 转移",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s3_state": {
+        "id": "startup_s3_state",
+        "nodeId": "startup_s3",
+        "direction": "output",
+        "label": "当前状态 S3",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s4_enter": {
+        "id": "startup_s4_enter",
+        "nodeId": "startup_s4",
+        "direction": "input",
+        "label": "进入 / 转移",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s4_state": {
+        "id": "startup_s4_state",
+        "nodeId": "startup_s4",
+        "direction": "output",
+        "label": "当前状态 S4",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s5_enter": {
+        "id": "startup_s5_enter",
+        "nodeId": "startup_s5",
+        "direction": "input",
+        "label": "进入 / 转移",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s5_state": {
+        "id": "startup_s5_state",
+        "nodeId": "startup_s5",
+        "direction": "output",
+        "label": "当前状态 S5",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s6_enter": {
+        "id": "startup_s6_enter",
+        "nodeId": "startup_s6",
+        "direction": "input",
+        "label": "进入 / 转移",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s6_state": {
+        "id": "startup_s6_state",
+        "nodeId": "startup_s6",
+        "direction": "output",
+        "label": "当前状态 S6",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s7_enter": {
+        "id": "startup_s7_enter",
+        "nodeId": "startup_s7",
+        "direction": "input",
+        "label": "进入 / 转移",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s7_state": {
+        "id": "startup_s7_state",
+        "nodeId": "startup_s7",
+        "direction": "output",
+        "label": "当前状态 S7",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s1_advance": {
+        "id": "startup_s1_advance",
+        "nodeId": "startup_s1",
+        "direction": "output",
+        "label": "腿长到位并驻留",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s2_advance": {
+        "id": "startup_s2_advance",
+        "nodeId": "startup_s2",
+        "direction": "output",
+        "label": "腿角对齐并驻留",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s3_advance": {
+        "id": "startup_s3_advance",
+        "nodeId": "startup_s3",
+        "direction": "output",
+        "label": "腿角到位并驻留",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s4_advance": {
+        "id": "startup_s4_advance",
+        "nodeId": "startup_s4",
+        "direction": "output",
+        "label": "ramp 达 1",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s6_advance": {
+        "id": "startup_s6_advance",
+        "nodeId": "startup_s6",
+        "direction": "output",
+        "label": "角到位并驻留",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s7_advance": {
+        "id": "startup_s7_advance",
+        "nodeId": "startup_s7",
+        "direction": "output",
+        "label": "已武装且翻正并驻留",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s1_timeout": {
+        "id": "startup_s1_timeout",
+        "nodeId": "startup_s1",
+        "direction": "output",
+        "label": "阶段超时",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s2_timeout": {
+        "id": "startup_s2_timeout",
+        "nodeId": "startup_s2",
+        "direction": "output",
+        "label": "阶段超时",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s3_timeout": {
+        "id": "startup_s3_timeout",
+        "nodeId": "startup_s3",
+        "direction": "output",
+        "label": "阶段超时",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_s6_timeout": {
+        "id": "startup_s6_timeout",
+        "nodeId": "startup_s6",
+        "direction": "output",
+        "label": "阶段超时",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_monitor_ctx": {
+        "id": "startup_monitor_ctx",
+        "nodeId": "startup_monitor",
+        "direction": "input",
+        "label": "状态 / armed / air",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "startup_monitor_trigger": {
+        "id": "startup_monitor_trigger",
+        "nodeId": "startup_monitor",
+        "direction": "output",
+        "label": "保护触发",
+        "dataType": "bool",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_state_in": {
+        "id": "startup_state_in",
+        "nodeId": "startup_state",
+        "direction": "input",
+        "label": "当前状态",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "startup_state_out": {
+        "id": "startup_state_out",
+        "nodeId": "startup_state",
+        "direction": "output",
+        "label": "模式上下文",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "obs_leg_feedback": {
+        "id": "obs_leg_feedback",
+        "nodeId": "observe",
+        "direction": "output",
+        "label": "腿角、转速与几何反馈",
+        "dataType": "leg-feedback",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "obs_aux": {
+        "id": "obs_aux",
+        "nodeId": "observe",
+        "direction": "output",
+        "label": "腿长、姿态与传感器观测",
+        "dataType": "robot-observation",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 3,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "target_leg_goals": {
+        "id": "target_leg_goals",
+        "nodeId": "target",
+        "direction": "output",
+        "label": "当前腿角目标",
+        "dataType": "leg-goals",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "target_leg_lengths": {
+        "id": "target_leg_lengths",
+        "nodeId": "target",
+        "direction": "output",
+        "label": "左右腿目标长度",
+        "dataType": "float",
+        "unit": "m",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "mode_leg_feedback": {
+        "id": "mode_leg_feedback",
+        "nodeId": "mode",
+        "direction": "input",
+        "label": "腿角与转速反馈",
+        "dataType": "leg-feedback",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 6,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_leg_goals": {
+        "id": "mode_leg_goals",
+        "nodeId": "mode",
+        "direction": "input",
+        "label": "当前腿角目标",
+        "dataType": "leg-goals",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 7,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "air_observations": {
+        "id": "air_observations",
+        "nodeId": "air",
+        "direction": "input",
+        "label": "腿部与惯性观测",
+        "dataType": "robot-observation",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "force_observations": {
+        "id": "force_observations",
+        "nodeId": "force",
+        "direction": "input",
+        "label": "腿长与横滚观测",
+        "dataType": "robot-observation",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "force_targets": {
+        "id": "force_targets",
+        "nodeId": "force",
+        "direction": "input",
+        "label": "左右腿目标长度",
+        "dataType": "float",
+        "unit": "m",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "force_context": {
+        "id": "force_context",
+        "nodeId": "force",
+        "direction": "input",
+        "label": "阶段与离地情况",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "wheel_observations": {
+        "id": "wheel_observations",
+        "nodeId": "wheel",
+        "direction": "input",
+        "label": "左右轮缘速度",
+        "dataType": "robot-observation",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "wheel_context": {
+        "id": "wheel_context",
+        "nodeId": "wheel",
+        "direction": "input",
+        "label": "阶段与离地情况",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "vmc_feedback": {
+        "id": "vmc_feedback",
+        "nodeId": "vmc",
+        "direction": "input",
+        "label": "腿几何与关节转速",
+        "dataType": "leg-feedback",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "vmc_context": {
+        "id": "vmc_context",
+        "nodeId": "vmc",
+        "direction": "input",
+        "label": "阶段与离地情况",
+        "dataType": "mode",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 3,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "binding_mode_leg_feedback": {
+        "id": "binding_mode_leg_feedback",
+        "nodeId": "boundary_input_mode-detail",
+        "direction": "output",
+        "label": "腿角与转速反馈",
+        "dataType": "leg-feedback",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many",
+        "parentPortId": "mode_leg_feedback"
+      },
+      "binding_mode_leg_goals": {
+        "id": "binding_mode_leg_goals",
+        "nodeId": "boundary_input_mode-detail",
+        "direction": "output",
+        "label": "当前腿角目标",
+        "dataType": "leg-goals",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "many",
+        "parentPortId": "mode_leg_goals"
+      },
+      "mode_pd_goals": {
+        "id": "mode_pd_goals",
+        "nodeId": "mode_pd",
+        "direction": "input",
+        "label": "腿角目标",
+        "dataType": "leg-goals",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_pd_feedback": {
+        "id": "mode_pd_feedback",
+        "nodeId": "mode_pd",
+        "direction": "input",
+        "label": "腿角与转速",
+        "dataType": "leg-feedback",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_ramp_goals": {
+        "id": "mode_ramp_goals",
+        "nodeId": "mode_ramp",
+        "direction": "input",
+        "label": "腿角目标",
+        "dataType": "leg-goals",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_ramp_feedback": {
+        "id": "mode_ramp_feedback",
+        "nodeId": "mode_ramp",
+        "direction": "input",
+        "label": "腿角与转速",
+        "dataType": "leg-feedback",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 3,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_air_apply_goals": {
+        "id": "mode_air_apply_goals",
+        "nodeId": "mode_air_apply",
+        "direction": "input",
+        "label": "腿角目标",
+        "dataType": "leg-goals",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "",
+        "multiplicity": "one"
+      },
+      "mode_air_apply_feedback": {
+        "id": "mode_air_apply_feedback",
+        "nodeId": "mode_air_apply",
+        "direction": "input",
+        "label": "腿角与转速",
+        "dataType": "leg-feedback",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 3,
+        "description": "",
+        "multiplicity": "one"
+      }
+    },
+    "edges": {
+      "e_lqr_l_Tw_mode_l_Tw": {
+        "id": "e_lqr_l_Tw_mode_l_Tw",
+        "sourcePortId": "lqr_l_Tw",
+        "targetPortId": "mode_l_Tw",
+        "label": "l_Tw",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "e_lqr_r_Tw_mode_r_Tw": {
+        "id": "e_lqr_r_Tw_mode_r_Tw",
+        "sourcePortId": "lqr_r_Tw",
+        "targetPortId": "mode_r_Tw",
+        "label": "r_Tw",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "e_lqr_l_Tp_mode_l_Tp": {
+        "id": "e_lqr_l_Tp_mode_l_Tp",
+        "sourcePortId": "lqr_l_Tp",
+        "targetPortId": "mode_l_Tp",
+        "label": "l_Tp",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "e_lqr_r_Tp_mode_r_Tp": {
+        "id": "e_lqr_r_Tp_mode_r_Tp",
+        "sourcePortId": "lqr_r_Tp",
+        "targetPortId": "mode_r_Tp",
+        "label": "r_Tp",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "e_obs_x_lqr_x": {
+        "id": "e_obs_x_lqr_x",
+        "sourcePortId": "obs_x",
+        "targetPortId": "lqr_x",
+        "label": "观测状态",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "e_obs_l_gain_l": {
+        "id": "e_obs_l_gain_l",
+        "sourcePortId": "obs_l",
+        "targetPortId": "gain_l",
+        "label": "实测腿长",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "e_target_x_lqr_ref": {
+        "id": "e_target_x_lqr_ref",
+        "sourcePortId": "target_x",
+        "targetPortId": "lqr_ref",
+        "label": "参考状态",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "e_gain_k_lqr_k": {
+        "id": "e_gain_k_lqr_k",
+        "sourcePortId": "gain_k",
+        "targetPortId": "lqr_k",
+        "label": "K",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "e_air_flag_lqr_air": {
+        "id": "e_air_flag_lqr_air",
+        "sourcePortId": "air_flag",
+        "targetPortId": "lqr_air",
+        "label": "air",
+        "kind": "control",
+        "condition": "",
+        "description": ""
+      },
+      "e_mode_flag_mode_in": {
+        "id": "e_mode_flag_mode_in",
+        "sourcePortId": "mode_flag",
+        "targetPortId": "mode_in",
+        "label": "模式条件",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "e_mode_tw_wheel_tw": {
+        "id": "e_mode_tw_wheel_tw",
+        "sourcePortId": "mode_tw",
+        "targetPortId": "wheel_tw",
+        "label": "轮端力矩",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "e_mode_tp_vmc_tp": {
+        "id": "e_mode_tp_vmc_tp",
+        "sourcePortId": "mode_tp",
+        "targetPortId": "vmc_tp",
+        "label": "腿端力矩",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "e_force_out_mode_f_in": {
+        "id": "e_force_out_mode_f_in",
+        "sourcePortId": "force_out",
+        "targetPortId": "mode_f_in",
+        "label": "独立腿长力",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "e_mode_f_out_vmc_f": {
+        "id": "e_mode_f_out_vmc_f",
+        "sourcePortId": "mode_f_out",
+        "targetPortId": "vmc_f",
+        "label": "经输出闸的腿长力",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_14": {
+        "id": "detail_e_14",
+        "sourcePortId": "binding_mode_in",
+        "targetPortId": "mode_classify_ctx",
+        "label": "模式上下文",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_15": {
+        "id": "detail_e_15",
+        "sourcePortId": "binding_mode_l_Tw",
+        "targetPortId": "mode_pack_l_Tw",
+        "label": "l_Tw",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_16": {
+        "id": "detail_e_16",
+        "sourcePortId": "binding_mode_r_Tw",
+        "targetPortId": "mode_pack_r_Tw",
+        "label": "r_Tw",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_17": {
+        "id": "detail_e_17",
+        "sourcePortId": "binding_mode_l_Tp",
+        "targetPortId": "mode_pack_l_Tp",
+        "label": "l_Tp",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_18": {
+        "id": "detail_e_18",
+        "sourcePortId": "binding_mode_r_Tp",
+        "targetPortId": "mode_pack_r_Tp",
+        "label": "r_Tp",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_19": {
+        "id": "detail_e_19",
+        "sourcePortId": "mode_classify_out",
+        "targetPortId": "mode_branch_ctx",
+        "label": "状态选择",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_21": {
+        "id": "detail_e_21",
+        "sourcePortId": "mode_pack_out",
+        "targetPortId": "mode_ramp_u",
+        "label": "原始反馈",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_22": {
+        "id": "detail_e_22",
+        "sourcePortId": "mode_pack_out",
+        "targetPortId": "mode_keep_u",
+        "label": "原始反馈",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_23": {
+        "id": "detail_e_23",
+        "sourcePortId": "mode_branch_pd",
+        "targetPortId": "mode_pd_select",
+        "label": "成立",
+        "kind": "control",
+        "condition": "(S7 && prot_armed) || S1/S2/S3/S6",
+        "description": "(S7 && prot_armed) || S1/S2/S3/S6"
+      },
+      "detail_e_24": {
+        "id": "detail_e_24",
+        "sourcePortId": "mode_branch_ramp",
+        "targetPortId": "mode_ramp_select",
+        "label": "否则且 S4",
+        "kind": "control",
+        "condition": "前一个分支不成立 && prone_rec_state == PRS_LQR_RAMP",
+        "description": "前一个分支不成立 && prone_rec_state == PRS_LQR_RAMP"
+      },
+      "detail_e_25": {
+        "id": "detail_e_25",
+        "sourcePortId": "mode_branch_normal",
+        "targetPortId": "mode_keep_select",
+        "label": "其余",
+        "kind": "control",
+        "condition": "前两个分支均不成立",
+        "description": "前两个分支均不成立"
+      },
+      "detail_e_26": {
+        "id": "detail_e_26",
+        "sourcePortId": "mode_pd_out",
+        "targetPortId": "mode_merge_u",
+        "label": "阶段输出",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_27": {
+        "id": "detail_e_27",
+        "sourcePortId": "mode_ramp_out",
+        "targetPortId": "mode_merge_u",
+        "label": "阶段输出",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_28": {
+        "id": "detail_e_28",
+        "sourcePortId": "mode_keep_out",
+        "targetPortId": "mode_merge_u",
+        "label": "阶段输出",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_29": {
+        "id": "detail_e_29",
+        "sourcePortId": "mode_classify_out",
+        "targetPortId": "mode_air_check_ctx",
+        "label": "air",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_30": {
+        "id": "detail_e_30",
+        "sourcePortId": "mode_merge_out",
+        "targetPortId": "mode_air_apply_u",
+        "label": "",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_31": {
+        "id": "detail_e_31",
+        "sourcePortId": "mode_merge_out",
+        "targetPortId": "mode_ground_u",
+        "label": "",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_32": {
+        "id": "detail_e_32",
+        "sourcePortId": "mode_air_check_yes",
+        "targetPortId": "mode_air_apply_select",
+        "label": "是",
+        "kind": "control",
+        "condition": "air_state != 0",
+        "description": "air_state != 0"
+      },
+      "detail_e_33": {
+        "id": "detail_e_33",
+        "sourcePortId": "mode_air_check_no",
+        "targetPortId": "mode_ground_select",
+        "label": "否",
+        "kind": "control",
+        "condition": "air_state == 0",
+        "description": "air_state == 0"
+      },
+      "detail_e_34": {
+        "id": "detail_e_34",
+        "sourcePortId": "mode_air_apply_out",
+        "targetPortId": "mode_output_gate_u",
+        "label": "悬空分支",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_35": {
+        "id": "detail_e_35",
+        "sourcePortId": "mode_ground_out",
+        "targetPortId": "mode_output_gate_u",
+        "label": "接地分支",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_36": {
+        "id": "detail_e_36",
+        "sourcePortId": "mode_classify_out",
+        "targetPortId": "mode_output_gate_ctx",
+        "label": "state / armed",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_37": {
+        "id": "detail_e_37",
+        "sourcePortId": "binding_mode_f_in",
+        "targetPortId": "mode_output_gate_force_in",
+        "label": "F_leg",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_38": {
+        "id": "detail_e_38",
+        "sourcePortId": "mode_output_gate_force_out",
+        "targetPortId": "binding_mode_f_out",
+        "label": "F_leg",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_39": {
+        "id": "detail_e_39",
+        "sourcePortId": "mode_output_gate_out",
+        "targetPortId": "mode_unpack_u",
+        "label": "",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_40": {
+        "id": "detail_e_40",
+        "sourcePortId": "mode_unpack_tw",
+        "targetPortId": "binding_mode_tw",
+        "label": "轮端力矩",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_41": {
+        "id": "detail_e_41",
+        "sourcePortId": "mode_unpack_tp",
+        "targetPortId": "binding_mode_tp",
+        "label": "腿端力矩",
+        "kind": "force",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_42": {
+        "id": "detail_e_42",
+        "sourcePortId": "binding_mode_classify_ctx",
+        "targetPortId": "startup_zero_ctx",
+        "label": "指令与观测",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_43": {
+        "id": "detail_e_43",
+        "sourcePortId": "startup_zero_yes",
+        "targetPortId": "startup_return_in",
+        "label": "是",
+        "kind": "control",
+        "condition": "zero_force != 0",
+        "description": "zero_force != 0"
+      },
+      "detail_e_44": {
+        "id": "detail_e_44",
+        "sourcePortId": "startup_zero_no",
+        "targetPortId": "startup_dispatch_in",
+        "label": "非零力",
+        "kind": "control",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_45": {
+        "id": "detail_e_45",
+        "sourcePortId": "startup_dispatch_detect",
+        "targetPortId": "startup_valid_in",
+        "label": "S0",
+        "kind": "control",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_46": {
+        "id": "detail_e_46",
+        "sourcePortId": "startup_valid_waiting",
+        "targetPortId": "startup_wait_in",
+        "label": "无效或驻留不足",
+        "kind": "control",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_47": {
+        "id": "detail_e_47",
+        "sourcePortId": "startup_dispatch_existing",
+        "targetPortId": "startup_existing_in",
+        "label": "非 S0",
+        "kind": "control",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_48": {
+        "id": "detail_e_48",
+        "sourcePortId": "startup_valid_ready",
+        "targetPortId": "startup_tilt_in",
+        "label": "S0 有效后",
+        "kind": "control",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_49": {
+        "id": "detail_e_49",
+        "sourcePortId": "startup_tilt_no",
+        "targetPortId": "startup_fold_in",
+        "label": "否则",
+        "kind": "control",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_50": {
+        "id": "detail_e_50",
+        "sourcePortId": "startup_fold_no",
+        "targetPortId": "startup_prone_in",
+        "label": "否则",
+        "kind": "control",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_51": {
+        "id": "detail_e_51",
+        "sourcePortId": "startup_tilt_yes",
+        "targetPortId": "startup_s7_enter",
+        "label": "翻倒",
+        "kind": "transition",
+        "condition": "|pitch| > 1.2 || |roll| > 1.2",
+        "description": "|pitch| > 1.2 || |roll| > 1.2"
+      },
+      "detail_e_52": {
+        "id": "detail_e_52",
+        "sourcePortId": "startup_fold_yes",
+        "targetPortId": "startup_s6_enter",
+        "label": "折叠快转",
+        "kind": "transition",
+        "condition": "三组折叠条件全部成立",
+        "description": "三组折叠条件全部成立"
+      },
+      "detail_e_53": {
+        "id": "detail_e_53",
+        "sourcePortId": "startup_prone_yes",
+        "targetPortId": "startup_s1_enter",
+        "label": "常规恢复",
+        "kind": "transition",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_54": {
+        "id": "detail_e_54",
+        "sourcePortId": "startup_prone_no",
+        "targetPortId": "startup_s5_enter",
+        "label": "直立基线",
+        "kind": "transition",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_55": {
+        "id": "detail_e_55",
+        "sourcePortId": "startup_s1_advance",
+        "targetPortId": "startup_s2_enter",
+        "label": "腿长到位并驻留",
+        "kind": "transition",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_56": {
+        "id": "detail_e_56",
+        "sourcePortId": "startup_s2_advance",
+        "targetPortId": "startup_s3_enter",
+        "label": "腿角对齐并驻留",
+        "kind": "transition",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_57": {
+        "id": "detail_e_57",
+        "sourcePortId": "startup_s3_advance",
+        "targetPortId": "startup_s4_enter",
+        "label": "腿角到位并驻留",
+        "kind": "transition",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_58": {
+        "id": "detail_e_58",
+        "sourcePortId": "startup_s4_advance",
+        "targetPortId": "startup_s5_enter",
+        "label": "ramp 达 1",
+        "kind": "transition",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_59": {
+        "id": "detail_e_59",
+        "sourcePortId": "startup_s6_advance",
+        "targetPortId": "startup_s4_enter",
+        "label": "角到位并驻留",
+        "kind": "transition",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_60": {
+        "id": "detail_e_60",
+        "sourcePortId": "startup_s7_advance",
+        "targetPortId": "startup_s1_enter",
+        "label": "已武装且翻正并驻留",
+        "kind": "transition",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_61": {
+        "id": "detail_e_61",
+        "sourcePortId": "startup_s1_timeout",
+        "targetPortId": "startup_s7_enter",
+        "label": "超时 → 等确认",
+        "kind": "transition",
+        "condition": "rec6_t > rec_stage_timeout",
+        "description": "rec6_t > rec_stage_timeout"
+      },
+      "detail_e_62": {
+        "id": "detail_e_62",
+        "sourcePortId": "startup_s2_timeout",
+        "targetPortId": "startup_s7_enter",
+        "label": "超时 → 等确认",
+        "kind": "transition",
+        "condition": "rec6_t > rec_stage_timeout",
+        "description": "rec6_t > rec_stage_timeout"
+      },
+      "detail_e_63": {
+        "id": "detail_e_63",
+        "sourcePortId": "startup_s3_timeout",
+        "targetPortId": "startup_s7_enter",
+        "label": "超时 → 等确认",
+        "kind": "transition",
+        "condition": "rec6_t > rec_stage_timeout",
+        "description": "rec6_t > rec_stage_timeout"
+      },
+      "detail_e_64": {
+        "id": "detail_e_64",
+        "sourcePortId": "startup_s6_timeout",
+        "targetPortId": "startup_s7_enter",
+        "label": "超时 → 等确认",
+        "kind": "transition",
+        "condition": "rec6_t > rec_stage_timeout",
+        "description": "rec6_t > rec_stage_timeout"
+      },
+      "detail_e_65": {
+        "id": "detail_e_65",
+        "sourcePortId": "binding_mode_classify_ctx",
+        "targetPortId": "startup_monitor_ctx",
+        "label": "并行保护监控",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_66": {
+        "id": "detail_e_66",
+        "sourcePortId": "startup_monitor_trigger",
+        "targetPortId": "startup_s7_enter",
+        "label": "S4/S5 保护沿",
+        "kind": "transition",
+        "condition": "",
+        "description": ""
+      },
+      "detail_e_67": {
+        "id": "detail_e_67",
+        "sourcePortId": "startup_s1_state",
+        "targetPortId": "startup_state_in",
+        "label": "S1",
+        "kind": "data",
+        "condition": "prone_rec_state == 1",
+        "description": "prone_rec_state == 1"
+      },
+      "detail_e_68": {
+        "id": "detail_e_68",
+        "sourcePortId": "startup_s2_state",
+        "targetPortId": "startup_state_in",
+        "label": "S2",
+        "kind": "data",
+        "condition": "prone_rec_state == 2",
+        "description": "prone_rec_state == 2"
+      },
+      "detail_e_69": {
+        "id": "detail_e_69",
+        "sourcePortId": "startup_s3_state",
+        "targetPortId": "startup_state_in",
+        "label": "S3",
+        "kind": "data",
+        "condition": "prone_rec_state == 3",
+        "description": "prone_rec_state == 3"
+      },
+      "detail_e_70": {
+        "id": "detail_e_70",
+        "sourcePortId": "startup_s4_state",
+        "targetPortId": "startup_state_in",
+        "label": "S4",
+        "kind": "data",
+        "condition": "prone_rec_state == 4",
+        "description": "prone_rec_state == 4"
+      },
+      "detail_e_71": {
+        "id": "detail_e_71",
+        "sourcePortId": "startup_s5_state",
+        "targetPortId": "startup_state_in",
+        "label": "S5",
+        "kind": "data",
+        "condition": "prone_rec_state == 5",
+        "description": "prone_rec_state == 5"
+      },
+      "detail_e_72": {
+        "id": "detail_e_72",
+        "sourcePortId": "startup_s6_state",
+        "targetPortId": "startup_state_in",
+        "label": "S6",
+        "kind": "data",
+        "condition": "prone_rec_state == 6",
+        "description": "prone_rec_state == 6"
+      },
+      "detail_e_73": {
+        "id": "detail_e_73",
+        "sourcePortId": "startup_s7_state",
+        "targetPortId": "startup_state_in",
+        "label": "S7",
+        "kind": "data",
+        "condition": "prone_rec_state == 7",
+        "description": "prone_rec_state == 7"
+      },
+      "detail_e_74": {
+        "id": "detail_e_74",
+        "sourcePortId": "startup_wait_state",
+        "targetPortId": "startup_state_in",
+        "label": "S0 等待",
+        "kind": "data",
+        "condition": "prone_rec_state == 0",
+        "description": "prone_rec_state == 0"
+      },
+      "detail_e_75": {
+        "id": "detail_e_75",
+        "sourcePortId": "startup_existing_state",
+        "targetPortId": "startup_state_in",
+        "label": "原状态 / 后续转移",
+        "kind": "data",
+        "condition": "prone_rec_state != 0",
+        "description": "prone_rec_state != 0"
+      },
+      "detail_e_76": {
+        "id": "detail_e_76",
+        "sourcePortId": "startup_state_out",
+        "targetPortId": "binding_mode_classify_out",
+        "label": "回到上层条件选择",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_obs_leg_feedback_mode_leg_feedback": {
+        "id": "reading_obs_leg_feedback_mode_leg_feedback",
+        "sourcePortId": "obs_leg_feedback",
+        "targetPortId": "mode_leg_feedback",
+        "label": "角度反馈",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_target_leg_goals_mode_leg_goals": {
+        "id": "reading_target_leg_goals_mode_leg_goals",
+        "sourcePortId": "target_leg_goals",
+        "targetPortId": "mode_leg_goals",
+        "label": "腿角目标",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_obs_aux_air_observations": {
+        "id": "reading_obs_aux_air_observations",
+        "sourcePortId": "obs_aux",
+        "targetPortId": "air_observations",
+        "label": "支撑估计所需观测",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_obs_aux_force_observations": {
+        "id": "reading_obs_aux_force_observations",
+        "sourcePortId": "obs_aux",
+        "targetPortId": "force_observations",
+        "label": "支撑反馈",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_target_leg_lengths_force_targets": {
+        "id": "reading_target_leg_lengths_force_targets",
+        "sourcePortId": "target_leg_lengths",
+        "targetPortId": "force_targets",
+        "label": "目标长度",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_mode_flag_force_context": {
+        "id": "reading_mode_flag_force_context",
+        "sourcePortId": "mode_flag",
+        "targetPortId": "force_context",
+        "label": "阶段/离地",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_obs_aux_wheel_observations": {
+        "id": "reading_obs_aux_wheel_observations",
+        "sourcePortId": "obs_aux",
+        "targetPortId": "wheel_observations",
+        "label": "轮速反馈",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_mode_flag_wheel_context": {
+        "id": "reading_mode_flag_wheel_context",
+        "sourcePortId": "mode_flag",
+        "targetPortId": "wheel_context",
+        "label": "阶段/离地",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_obs_leg_feedback_vmc_feedback": {
+        "id": "reading_obs_leg_feedback_vmc_feedback",
+        "sourcePortId": "obs_leg_feedback",
+        "targetPortId": "vmc_feedback",
+        "label": "关节反馈",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_mode_flag_vmc_context": {
+        "id": "reading_mode_flag_vmc_context",
+        "sourcePortId": "mode_flag",
+        "targetPortId": "vmc_context",
+        "label": "阶段/离地",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_binding_mode_leg_goals_mode_pd_goals": {
+        "id": "reading_binding_mode_leg_goals_mode_pd_goals",
+        "sourcePortId": "binding_mode_leg_goals",
+        "targetPortId": "mode_pd_goals",
+        "label": "读取目标",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_binding_mode_leg_feedback_mode_pd_feedback": {
+        "id": "reading_binding_mode_leg_feedback_mode_pd_feedback",
+        "sourcePortId": "binding_mode_leg_feedback",
+        "targetPortId": "mode_pd_feedback",
+        "label": "读取反馈",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_binding_mode_leg_goals_mode_ramp_goals": {
+        "id": "reading_binding_mode_leg_goals_mode_ramp_goals",
+        "sourcePortId": "binding_mode_leg_goals",
+        "targetPortId": "mode_ramp_goals",
+        "label": "读取目标",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_binding_mode_leg_feedback_mode_ramp_feedback": {
+        "id": "reading_binding_mode_leg_feedback_mode_ramp_feedback",
+        "sourcePortId": "binding_mode_leg_feedback",
+        "targetPortId": "mode_ramp_feedback",
+        "label": "读取反馈",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_binding_mode_leg_goals_mode_air_apply_goals": {
+        "id": "reading_binding_mode_leg_goals_mode_air_apply_goals",
+        "sourcePortId": "binding_mode_leg_goals",
+        "targetPortId": "mode_air_apply_goals",
+        "label": "读取目标",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      },
+      "reading_binding_mode_leg_feedback_mode_air_apply_feedback": {
+        "id": "reading_binding_mode_leg_feedback_mode_air_apply_feedback",
+        "sourcePortId": "binding_mode_leg_feedback",
+        "targetPortId": "mode_air_apply_feedback",
+        "label": "读取反馈",
+        "kind": "data",
+        "condition": "",
+        "description": ""
+      }
+    },
+    "groups": {},
+    "scenes": {
+      "root": {
+        "id": "root",
+        "label": "工程总览",
+        "description": ""
+      },
+      "mode-detail": {
+        "id": "mode-detail",
+        "label": "模式处理",
+        "description": "按 a7d8f90 源码人工整理，条件图不执行控制代码。",
+        "ownerNodeId": "mode"
+      },
+      "startup-detail": {
+        "id": "startup-detail",
+        "label": "模式判定与状态转换",
+        "description": "按 a7d8f90 源码人工整理，条件图不执行控制代码。",
+        "ownerNodeId": "mode_classify"
+      }
+    }
+  },
+  "view": {
+    "nodes": {
+      "observe": {
+        "position": {
+          "x": 0,
+          "y": 120
+        },
+        "width": 360
+      },
+      "target": {
+        "position": {
+          "x": 0,
+          "y": 780
+        },
+        "width": 360
+      },
+      "gain": {
+        "position": {
+          "x": 500,
+          "y": 780
+        },
+        "width": 360
+      },
+      "air": {
+        "position": {
+          "x": 500,
+          "y": -220
+        },
+        "width": 360
+      },
+      "lqr": {
+        "position": {
+          "x": 1000,
+          "y": 280
+        },
+        "width": 360
+      },
+      "mode": {
+        "position": {
+          "x": 1500,
+          "y": 280
+        },
+        "width": 360
+      },
+      "wheel": {
+        "position": {
+          "x": 2000,
+          "y": 0
+        },
+        "width": 360
+      },
+      "force": {
+        "position": {
+          "x": 1000,
+          "y": 1200
+        },
+        "width": 360
+      },
+      "vmc": {
+        "position": {
+          "x": 2000,
+          "y": 1000
+        },
+        "width": 360
+      },
+      "boundary_input_mode-detail": {
+        "position": {
+          "x": 0,
+          "y": 840
+        },
+        "width": 300
+      },
+      "boundary_output_mode-detail": {
+        "position": {
+          "x": 3537.0000000000005,
+          "y": 1056
+        },
+        "width": 300
+      },
+      "mode_classify": {
+        "position": {
+          "x": 486.00000000000006,
+          "y": 84
+        },
+        "width": 360
+      },
+      "mode_pack": {
+        "position": {
+          "x": 486.00000000000006,
+          "y": 894
+        },
+        "width": 360
+      },
+      "mode_branch": {
+        "position": {
+          "x": 999.0000000000001,
+          "y": 84
+        },
+        "width": 360
+      },
+      "mode_pd": {
+        "position": {
+          "x": 999.0000000000001,
+          "y": 624
+        },
+        "width": 360
+      },
+      "mode_ramp": {
+        "position": {
+          "x": 999.0000000000001,
+          "y": 1182
+        },
+        "width": 360
+      },
+      "mode_keep": {
+        "position": {
+          "x": 999.0000000000001,
+          "y": 1740
+        },
+        "width": 360
+      },
+      "mode_merge": {
+        "position": {
+          "x": 1512,
+          "y": 1056
+        },
+        "width": 360
+      },
+      "mode_air_check": {
+        "position": {
+          "x": 1512,
+          "y": 84
+        },
+        "width": 360
+      },
+      "mode_air_apply": {
+        "position": {
+          "x": 2025.0000000000002,
+          "y": 624
+        },
+        "width": 360
+      },
+      "mode_ground": {
+        "position": {
+          "x": 2025.0000000000002,
+          "y": 1380
+        },
+        "width": 360
+      },
+      "mode_output_gate": {
+        "position": {
+          "x": 2538,
+          "y": 1020
+        },
+        "width": 360
+      },
+      "mode_unpack": {
+        "position": {
+          "x": 3051,
+          "y": 1020
+        },
+        "width": 360
+      },
+      "boundary_input_startup-detail": {
+        "position": {
+          "x": 0,
+          "y": 408
+        },
+        "width": 300
+      },
+      "boundary_output_startup-detail": {
+        "position": {
+          "x": 3240,
+          "y": 2200
+        },
+        "width": 300
+      },
+      "startup_zero": {
+        "position": {
+          "x": 472.50000000000006,
+          "y": 300
+        },
+        "width": 360
+      },
+      "startup_return": {
+        "position": {
+          "x": 972.0000000000001,
+          "y": -96
+        },
+        "width": 360
+      },
+      "startup_dispatch": {
+        "position": {
+          "x": 472.50000000000006,
+          "y": 876
+        },
+        "width": 360
+      },
+      "startup_valid": {
+        "position": {
+          "x": 972.0000000000001,
+          "y": 408
+        },
+        "width": 360
+      },
+      "startup_wait": {
+        "position": {
+          "x": 972.0000000000001,
+          "y": 876
+        },
+        "width": 360
+      },
+      "startup_existing": {
+        "position": {
+          "x": 2970,
+          "y": 876
+        },
+        "width": 360
+      },
+      "startup_tilt": {
+        "position": {
+          "x": 1471.5,
+          "y": 408
+        },
+        "width": 360
+      },
+      "startup_fold": {
+        "position": {
+          "x": 1971.0000000000002,
+          "y": 408
+        },
+        "width": 360
+      },
+      "startup_prone": {
+        "position": {
+          "x": 2470.5,
+          "y": 408
+        },
+        "width": 360
+      },
+      "startup_s1": {
+        "position": {
+          "x": 472.50000000000006,
+          "y": 1390
+        },
+        "width": 360
+      },
+      "startup_s2": {
+        "position": {
+          "x": 972.0000000000001,
+          "y": 1390
+        },
+        "width": 360
+      },
+      "startup_s3": {
+        "position": {
+          "x": 1471.5,
+          "y": 1390
+        },
+        "width": 360
+      },
+      "startup_s4": {
+        "position": {
+          "x": 1971.0000000000002,
+          "y": 1390
+        },
+        "width": 360
+      },
+      "startup_s5": {
+        "position": {
+          "x": 2470.5,
+          "y": 1390
+        },
+        "width": 360
+      },
+      "startup_s6": {
+        "position": {
+          "x": 1971.0000000000002,
+          "y": 2272
+        },
+        "width": 360
+      },
+      "startup_s7": {
+        "position": {
+          "x": 472.50000000000006,
+          "y": 2272
+        },
+        "width": 360
+      },
+      "startup_monitor": {
+        "position": {
+          "x": 2470.5,
+          "y": 2272
+        },
+        "width": 360
+      },
+      "startup_state": {
+        "position": {
+          "x": 2970,
+          "y": 1390
+        },
+        "width": 360
+      },
+      "guide_root": {
+        "position": {
+          "x": -800,
+          "y": 0
+        },
+        "width": 700,
+        "height": 770
+      },
+      "terms_root": {
+        "position": {
+          "x": -800,
+          "y": 850
+        },
+        "width": 700,
+        "height": 850
+      },
+      "guide_mode": {
+        "position": {
+          "x": -800,
+          "y": 0
+        },
+        "width": 700,
+        "height": 760
+      },
+      "mode_order": {
+        "position": {
+          "x": -800,
+          "y": 850
+        },
+        "width": 700,
+        "height": 800
+      },
+      "state_legend": {
+        "position": {
+          "x": -800,
+          "y": 0
+        },
+        "width": 700,
+        "height": 850
+      },
+      "state_rules": {
+        "position": {
+          "x": -800,
+          "y": 1000
+        },
+        "width": 700,
+        "height": 900
+      }
+    },
+    "edges": {
+      "e_lqr_l_Tw_mode_l_Tw": {
+        "style": "bezier"
+      },
+      "e_lqr_r_Tw_mode_r_Tw": {
+        "style": "bezier"
+      },
+      "e_lqr_l_Tp_mode_l_Tp": {
+        "style": "bezier"
+      },
+      "e_lqr_r_Tp_mode_r_Tp": {
+        "style": "bezier"
+      },
+      "e_obs_x_lqr_x": {
+        "style": "bezier"
+      },
+      "e_obs_l_gain_l": {
+        "style": "bezier"
+      },
+      "e_target_x_lqr_ref": {
+        "style": "bezier"
+      },
+      "e_gain_k_lqr_k": {
+        "style": "bezier"
+      },
+      "e_air_flag_lqr_air": {
+        "style": "bezier"
+      },
+      "e_mode_flag_mode_in": {
+        "style": "bezier"
+      },
+      "e_mode_tw_wheel_tw": {
+        "style": "bezier"
+      },
+      "e_mode_tp_vmc_tp": {
+        "style": "bezier"
+      },
+      "e_force_out_mode_f_in": {
+        "style": "bezier"
+      },
+      "e_mode_f_out_vmc_f": {
+        "style": "bezier"
+      },
+      "detail_e_14": {
+        "style": "bezier"
+      },
+      "detail_e_15": {
+        "style": "bezier"
+      },
+      "detail_e_16": {
+        "style": "bezier"
+      },
+      "detail_e_17": {
+        "style": "bezier"
+      },
+      "detail_e_18": {
+        "style": "bezier"
+      },
+      "detail_e_19": {
+        "style": "bezier"
+      },
+      "detail_e_21": {
+        "style": "bezier"
+      },
+      "detail_e_22": {
+        "style": "bezier"
+      },
+      "detail_e_23": {
+        "style": "bezier"
+      },
+      "detail_e_24": {
+        "style": "bezier"
+      },
+      "detail_e_25": {
+        "style": "bezier"
+      },
+      "detail_e_26": {
+        "style": "bezier"
+      },
+      "detail_e_27": {
+        "style": "bezier"
+      },
+      "detail_e_28": {
+        "style": "bezier"
+      },
+      "detail_e_29": {
+        "style": "bezier"
+      },
+      "detail_e_30": {
+        "style": "bezier"
+      },
+      "detail_e_31": {
+        "style": "bezier"
+      },
+      "detail_e_32": {
+        "style": "bezier"
+      },
+      "detail_e_33": {
+        "style": "bezier"
+      },
+      "detail_e_34": {
+        "style": "bezier"
+      },
+      "detail_e_35": {
+        "style": "bezier"
+      },
+      "detail_e_36": {
+        "style": "bezier"
+      },
+      "detail_e_37": {
+        "style": "bezier"
+      },
+      "detail_e_38": {
+        "style": "bezier"
+      },
+      "detail_e_39": {
+        "style": "bezier"
+      },
+      "detail_e_40": {
+        "style": "bezier"
+      },
+      "detail_e_41": {
+        "style": "bezier"
+      },
+      "detail_e_42": {
+        "style": "bezier"
+      },
+      "detail_e_43": {
+        "style": "bezier"
+      },
+      "detail_e_44": {
+        "style": "bezier"
+      },
+      "detail_e_45": {
+        "style": "bezier"
+      },
+      "detail_e_46": {
+        "style": "bezier"
+      },
+      "detail_e_47": {
+        "style": "bezier"
+      },
+      "detail_e_48": {
+        "style": "bezier"
+      },
+      "detail_e_49": {
+        "style": "bezier"
+      },
+      "detail_e_50": {
+        "style": "bezier"
+      },
+      "detail_e_51": {
+        "style": "bezier"
+      },
+      "detail_e_52": {
+        "style": "bezier"
+      },
+      "detail_e_53": {
+        "style": "bezier"
+      },
+      "detail_e_54": {
+        "style": "bezier"
+      },
+      "detail_e_55": {
+        "style": "bezier"
+      },
+      "detail_e_56": {
+        "style": "bezier"
+      },
+      "detail_e_57": {
+        "style": "bezier"
+      },
+      "detail_e_58": {
+        "style": "bezier"
+      },
+      "detail_e_59": {
+        "style": "bezier"
+      },
+      "detail_e_60": {
+        "style": "bezier"
+      },
+      "detail_e_61": {
+        "style": "bezier"
+      },
+      "detail_e_62": {
+        "style": "bezier"
+      },
+      "detail_e_63": {
+        "style": "bezier"
+      },
+      "detail_e_64": {
+        "style": "bezier"
+      },
+      "detail_e_65": {
+        "style": "bezier"
+      },
+      "detail_e_66": {
+        "style": "bezier"
+      },
+      "detail_e_67": {
+        "style": "bezier"
+      },
+      "detail_e_68": {
+        "style": "bezier"
+      },
+      "detail_e_69": {
+        "style": "bezier"
+      },
+      "detail_e_70": {
+        "style": "bezier"
+      },
+      "detail_e_71": {
+        "style": "bezier"
+      },
+      "detail_e_72": {
+        "style": "bezier"
+      },
+      "detail_e_73": {
+        "style": "bezier"
+      },
+      "detail_e_74": {
+        "style": "bezier"
+      },
+      "detail_e_75": {
+        "style": "bezier"
+      },
+      "detail_e_76": {
+        "style": "bezier"
+      },
+      "reading_obs_leg_feedback_mode_leg_feedback": {
+        "style": "bezier"
+      },
+      "reading_target_leg_goals_mode_leg_goals": {
+        "style": "bezier"
+      },
+      "reading_obs_aux_air_observations": {
+        "style": "bezier"
+      },
+      "reading_obs_aux_force_observations": {
+        "style": "bezier"
+      },
+      "reading_target_leg_lengths_force_targets": {
+        "style": "bezier"
+      },
+      "reading_mode_flag_force_context": {
+        "style": "bezier"
+      },
+      "reading_obs_aux_wheel_observations": {
+        "style": "bezier"
+      },
+      "reading_mode_flag_wheel_context": {
+        "style": "bezier"
+      },
+      "reading_obs_leg_feedback_vmc_feedback": {
+        "style": "bezier"
+      },
+      "reading_mode_flag_vmc_context": {
+        "style": "bezier"
+      },
+      "reading_binding_mode_leg_goals_mode_pd_goals": {
+        "style": "bezier"
+      },
+      "reading_binding_mode_leg_feedback_mode_pd_feedback": {
+        "style": "bezier"
+      },
+      "reading_binding_mode_leg_goals_mode_ramp_goals": {
+        "style": "bezier"
+      },
+      "reading_binding_mode_leg_feedback_mode_ramp_feedback": {
+        "style": "bezier"
+      },
+      "reading_binding_mode_leg_goals_mode_air_apply_goals": {
+        "style": "bezier"
+      },
+      "reading_binding_mode_leg_feedback_mode_air_apply_feedback": {
+        "style": "bezier"
+      }
+    },
+    "groups": {},
+    "scenes": {
+      "root": {
+        "viewport": {
+          "x": 680,
+          "y": 80,
+          "zoom": 0.8
+        }
+      },
+      "mode-detail": {
+        "viewport": {
+          "x": 680,
+          "y": 80,
+          "zoom": 0.8
+        }
+      },
+      "startup-detail": {
+        "viewport": {
+          "x": 680,
+          "y": 80,
+          "zoom": 0.8
+        }
+      }
+    }
+  }
+}

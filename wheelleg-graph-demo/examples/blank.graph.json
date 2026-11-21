@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "projectId": "blank-example",
+  "title": "空白工程",
+  "revision": 0,
+  "rootSceneId": "root",
+  "sourceRoots": {},
+  "model": {
+    "nodes": {},
+    "ports": {},
+    "edges": {},
+    "groups": {},
+    "scenes": {
+      "root": {
+        "id": "root",
+        "label": "工程总览",
+        "description": ""
+      }
+    }
+  },
+  "view": {
+    "nodes": {},
+    "edges": {},
+    "groups": {},
+    "scenes": {
+      "root": {
+        "viewport": {
+          "x": 0,
+          "y": 0,
+          "zoom": 1
+        }
+      }
+    }
+  }
+}

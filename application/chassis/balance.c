@@ -11,6 +11,18 @@ static float wrap_angle(float a, float lo)
 }
 /* β 的物理范围：两根大腿夹角，0(并拢) ~ π(拉直)，窗口取 [-π/2, 3π/2) 两边各留 90° 余量 */
 #define BETA_WRAP_LO (-0.5f * PI)
+#define BETA_MIN_EXTENSION 1.0e-3f
+#define BETA_EXTENSION_WINDOW 0.35f
+#define LEG_LENGTH_MAX_OBSERVE 0.455f
+
+static float protect_full_extension(float beta)
+{
+    /* 满伸端越过零点会翻转五连杆解，膝间距为零还会导致除零。
+     * 窗口约对应 5 mm 满伸余量。保留正常折叠侧的张角供 S6 和登阶。 */
+    if (beta >= -BETA_EXTENSION_WINDOW && beta < BETA_MIN_EXTENSION)
+        return BETA_MIN_EXTENSION;
+    return beta;
+}
 
 
 void  r_Alpha_beta_calculate(float r_motor_big_leg,float r_motor_small_leg,float r_motor_big_speed,float r_motor_small_speed,r_leg_Resolve *r_leg)
@@ -26,7 +38,7 @@ void  r_Alpha_beta_calculate(float r_motor_big_leg,float r_motor_small_leg,float
     r_leg->r_alpha = (r_motor_big_leg - 0.61246f);
     r_leg->r_beta = -(r_motor_big_leg - r_motor_small_leg) + 1.60487f;
     r_leg->r_alpha = wrap_angle(r_leg->r_alpha, -PI);
-    r_leg->r_beta  = wrap_angle(r_leg->r_beta, BETA_WRAP_LO);
+    r_leg->r_beta  = protect_full_extension(wrap_angle(r_leg->r_beta, BETA_WRAP_LO));
     r_leg->r_dalpha = r_motor_big_speed;
     r_leg->r_dbeta =r_motor_big_speed - r_motor_small_speed;
 
@@ -102,6 +114,11 @@ void BalanceObserve(ten_balance_observation *ten_observe)
 
     ten_observe->l_leg_length = l_leg_theta_calculate(&l_leg, 1, 0);
     ten_observe->r_leg_length = r_leg_theta_calculate(&r_leg, 1, 0);
+    /* 只给满伸边界留余量，短腿观测仍用于折叠起立和登阶就绪判定。 */
+    if (ten_observe->l_leg_length > LEG_LENGTH_MAX_OBSERVE)
+        ten_observe->l_leg_length = LEG_LENGTH_MAX_OBSERVE;
+    if (ten_observe->r_leg_length > LEG_LENGTH_MAX_OBSERVE)
+        ten_observe->r_leg_length = LEG_LENGTH_MAX_OBSERVE;
 
    
 }
@@ -114,7 +131,7 @@ void  l_Alpha_beta_calculate(float l_motor_big_leg,float l_motor_small_leg,float
     l_leg->l_alpha = (l_motor_big_leg - 3.49184f);
     l_leg->l_beta = -(l_motor_big_leg - l_motor_small_leg) + 6.60945f;
     l_leg->l_alpha = wrap_angle(l_leg->l_alpha, -PI);
-    l_leg->l_beta  = wrap_angle(l_leg->l_beta, BETA_WRAP_LO);
+    l_leg->l_beta  = protect_full_extension(wrap_angle(l_leg->l_beta, BETA_WRAP_LO));
     l_leg->l_dalpha = l_motor_big_speed;
     l_leg->l_dbeta =l_motor_big_speed - l_motor_small_speed;
 

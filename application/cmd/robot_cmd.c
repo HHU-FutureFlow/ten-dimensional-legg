@@ -3,6 +3,9 @@
 #include "robot_cmd.h"
 // module
 #include "remote_control.h"
+#if WHEELLEG_REMOTE_HAS_VT02
+#include "vt_link.h"
+#endif
 #include "ins_task.h"
 #include "master_process.h"
 #include "message_center.h"
@@ -30,7 +33,9 @@ static Subscriber_t *chassis_feed_sub; // 底盘反馈信息订阅者
 static Chassis_Ctrl_Cmd_s chassis_cmd_send;      // 发送给底盘应用的信息,包括控制信息和UI绘制相关
 static Chassis_Upload_Data_s chassis_fetch_data; // 从底盘应用接收的反馈信息信息,底盘功率枪口热量与底盘运动状态等
 
+#if WHEELLEG_REMOTE_HAS_RC
 static RC_ctrl_t *rc_data;              // 遥控器数据,初始化时返回
+#endif
 static Vision_Recv_s *vision_recv_data; // 视觉接收数据指针,初始化时返回
 static Vision_Send_s vision_send_data;  // 视觉发送数据
 
@@ -43,11 +48,10 @@ static Publisher_t *shoot_cmd_pub;           // 发射控制消息发布者
 static Subscriber_t *shoot_feed_sub;         // 发射反馈信息订阅者
 static Shoot_Ctrl_Cmd_s shoot_cmd_send;      // 传递给发射的控制信息
 static Shoot_Upload_Data_s shoot_fetch_data; // 从发射获取的反馈信息
-static uint8_t keyboard_shoot_allowed;
-static uint8_t keyboard_shoot_last_key_count;
-volatile uint8_t keyboard_shoot_fire_active;
-
-static Robot_Status_e robot_state; // 机器人整体工作状态
+#if WHEELLEG_REMOTE_HAS_RC || WHEELLEG_REMOTE_HAS_VT02
+static uint8_t rc_stopped;
+static uint8_t mouse_key_stopped;
+#endif
 
 BMI088Instance *bmi088_test; // 云台IMU
 BMI088_Data_t bmi088_data;
@@ -94,7 +98,12 @@ void RobotCMDInit()
     //     },
     // };
     //bmi088_test = BMI088Register(&bmi088_config);
-   rc_data = RemoteControlInit(&huart3);   // 修改为对应串口,注意如果是自研板dbus协议串口需选用添加了反相器的那个
+#if WHEELLEG_REMOTE_HAS_RC
+    rc_data = RemoteControlInit(&huart3);
+#endif
+#if WHEELLEG_REMOTE_HAS_VT02
+    VTLinkInit(&huart1);
+#endif
     vision_recv_data = VisionInit(&huart1); // 视觉通信串口
 
     gimbal_cmd_pub = PubRegister("gimbal_cmd", sizeof(Gimbal_Ctrl_Cmd_s));
@@ -119,8 +128,6 @@ void RobotCMDInit()
     cmd_can_comm = CANCommInit(&comm_conf);
 #endif // GIMBAL_BOARD
     gimbal_cmd_send.pitch = 0;
-
-    robot_state = ROBOT_READY; // 启动时机器人进入工作模式,后续加入所有应用初始化完成之后再进入
 }
 
 /**
@@ -150,6 +157,10 @@ static void CalcOffsetAngle()
 #endif
 }
 
+#if WHEELLEG_REMOTE_HAS_RC
+static float vx_cmd_lpf;
+static float wz_cmd_lpf;
+
 /**
  * @brief 控制输入为遥控器(调试时)的模式和控制量设置
  *        FS-i6X + iA6B (SBUS),仅实现轮腿的前后移动与机体转向。
@@ -163,16 +174,13 @@ static void CalcOffsetAngle()
  *        注意:本层只产生"操作手意图"(死区+缩放+低通),
  *        s_target/yaw_target 的锚定与积分在 chassis.c 目标生成层完成。
  */
-static void RemoteControlSet()
+static void RemoteControlSet(const RC_ctrl_t *input)
 {
     /* ---- 轮腿行驶参数 ---- */
 #define RC_STICK_DEADBAND 20.0f  /* 摇杆死区,±660归一化计数 */
 #define WHEELLEG_VX_MAX   1.0f   /* 满杆前进速度 m/s,首次实车勿超1.5 */
 #define WHEELLEG_WZ_MAX   2.0f   /* 满杆转向角速度 rad/s,wz>0=左转=LQR yaw正方向 */
 #define RC_CMD_LPF_ALPHA  0.15f  /* 指令一阶低通系数(200Hz,τ≈25ms) */
-
-    static float vx_cmd_lpf = 0.0f;
-    static float wz_cmd_lpf = 0.0f;
 
     /* 前后: 右杆竖直(CH2,两种遥控一致);
      * 转向: 左杆水平 —— DT7 是 CH2/rocker_l_,FS-i6X SBUS 是 CH4/rocker_l1(台架确认) */
@@ -181,8 +189,8 @@ static void RemoteControlSet()
 #else
 #define RC_STICK_TURN rocker_l1
 #endif
-    float stick_forward = (float)rc_data[TEMP].rc.rocker_r1;
-    float stick_turn    = (float)rc_data[TEMP].rc.RC_STICK_TURN;
+    float stick_forward = (float)input->rc.rocker_r1;
+    float stick_turn    = (float)input->rc.RC_STICK_TURN;
 
     /* 死区 + 归一化缩放 */
     float vx_cmd = 0.0f, wz_cmd = 0.0f;
@@ -202,166 +210,238 @@ static void RemoteControlSet()
     wz_cmd_lpf += RC_CMD_LPF_ALPHA * (wz_cmd - wz_cmd_lpf);
 
     chassis_cmd_send.vx           = vx_cmd_lpf;
-    chassis_cmd_send.vy           = 0.0f;
     chassis_cmd_send.wz           = wz_cmd_lpf;
     chassis_cmd_send.chassis_mode = CHASSIS_WHEELLEG_DRIVE;
-
-    /* 轮腿无云台/发射机构,保持无力与关闭,防止残留旧指令 */
-    gimbal_cmd_send.gimbal_mode = GIMBAL_ZERO_FORCE;
-    shoot_cmd_send.shoot_mode    = SHOOT_OFF;
-    shoot_cmd_send.friction_mode = FRICTION_OFF;
-    shoot_cmd_send.load_mode     = LOAD_STOP;
 }
 
-/**
- * @brief 输入为键鼠时模式和控制量设置
- *
- */
-static void MouseKeySet()
+static uint8_t RemoteControlRead(RC_ctrl_t *input)
 {
-    uint8_t key_count;
+    /* 掉线回调和 UART 解包均会更新遥控状态，在线状态和通道值同取一拍。 */
+    const uint32_t irq_state = __get_PRIMASK();
+    __disable_irq();
+    const uint8_t online = RemoteControlIsOnline();
+    if (online)
+        *input = rc_data[TEMP];
+    __set_PRIMASK(irq_state);
+    return online;
+}
 
-    float keyboard_speed;
+static void EmergencyHandler(const RC_ctrl_t *input, uint8_t online)
+{
+    if (!online)
+        return;
 
-    gimbal_cmd_send.yaw += (float)rc_data[TEMP].mouse.x / 660 * 10; // 系数待测
-    gimbal_cmd_send.pitch += (float)rc_data[TEMP].mouse.y / 660 * 10;
+    if (switch_is_down(input->rc.switch_right))
+        rc_stopped = 1u;
+    else if (switch_is_up(input->rc.switch_right) && rc_stopped)
+    {
+        /* 用同一物理开关的下→上明确解除，单纯重连在上位不清键鼠急停。 */
+        rc_stopped = 0u;
+        mouse_key_stopped = 0u;
+    }
+}
 
-    switch (rc_data[TEMP].key_count[KEY_PRESS][Key_Z] % 3) // Z键设置弹速
+static void RemoteChassisSet(const RC_ctrl_t *input, uint8_t online)
+{
+    static uint8_t leg_gear_armed;
+    const uint8_t ready = online && !rc_stopped && !mouse_key_stopped;
+    /* SW2 上电先经过中挡才接管腿长，掉线、急停时撤销许可。 */
+    if (!ready)
+        leg_gear_armed = 0u;
+    else if (switch_is_mid(input->rc.switch_c))
+        leg_gear_armed = 1u;
+
+    if (leg_gear_armed)
     {
-    case 0:
-        shoot_cmd_send.bullet_speed = 15;
-        break;
-    case 1:
-        shoot_cmd_send.bullet_speed = 18;
-        break;
-    default:
-        shoot_cmd_send.bullet_speed = 30;
-        break;
-    }
-    switch (rc_data[TEMP].key_count[KEY_PRESS][Key_E] % 4) // E键设置发射模式
-    {
-    case 0:
-        shoot_cmd_send.load_mode = LOAD_STOP;
-        break;
-    case 1:
-        shoot_cmd_send.load_mode = LOAD_1_BULLET;
-        break;
-    case 2:
-        shoot_cmd_send.load_mode = LOAD_3_BULLET;
-        break;
-    default:
-        shoot_cmd_send.load_mode = LOAD_BURSTFIRE;
-        break;
-    }
-    switch (rc_data[TEMP].key_count[KEY_PRESS][Key_R] % 2) // R键开关弹舱
-    {
-    case 0:
-        shoot_cmd_send.lid_mode = LID_OPEN;
-        break;
-    default:
-        shoot_cmd_send.lid_mode = LID_CLOSE;
-        break;
-    }
-    switch (rc_data[TEMP].key_count[KEY_PRESS][Key_F] % 2) // F键开关摩擦轮
-    {
-    case 0:
-        shoot_cmd_send.friction_mode = FRICTION_OFF;
-        break;
-    default:
-        shoot_cmd_send.friction_mode = FRICTION_ON;
-        break;
-    }
-    switch (rc_data[TEMP].key_count[KEY_PRESS][Key_C] % 4) // C键设置底盘速度
-    {
-    case 0:
-        chassis_cmd_send.chassis_speed_buff = 40;
-        break;
-    case 1:
-        chassis_cmd_send.chassis_speed_buff = 60;
-        break;
-    case 2:
-        chassis_cmd_send.chassis_speed_buff = 80;
-        break;
-    default:
-        chassis_cmd_send.chassis_speed_buff = 100;
-        break;
+        if (switch_is_down(input->rc.switch_c))
+            chassis_cmd_send.leg_length_target = 0.15f;
+        else if (switch_is_up(input->rc.switch_c))
+            chassis_cmd_send.leg_length_target = 0.35f;
     }
 
-    keyboard_speed = KEYBOARD_CHASSIS_BASE_SPEED *
-                     (float)chassis_cmd_send.chassis_speed_buff * 0.01f;
-    if (rc_data[TEMP].key[KEY_PRESS].shift)
-        keyboard_speed *= KEYBOARD_SHIFT_SPEED_SCALE;
-
-    chassis_cmd_send.vx = rc_data[TEMP].key[KEY_PRESS].d * keyboard_speed -
-                          rc_data[TEMP].key[KEY_PRESS].a * keyboard_speed;
-    chassis_cmd_send.vy = rc_data[TEMP].key[KEY_PRESS].w * keyboard_speed -
-                          rc_data[TEMP].key[KEY_PRESS].s * keyboard_speed;
-    switch (rc_data[TEMP].key[KEY_PRESS].shift) // 待添加 按shift允许超功率 消耗缓冲能量
-    {
-    case 1:
-
-        break;
-
-    default:
-
-        break;
-    }
-
-    key_count = rc_data[TEMP].key_count[KEY_PRESS][Key_G];
-    if (key_count != keyboard_shoot_last_key_count)
-        keyboard_shoot_allowed = !keyboard_shoot_allowed;
-    keyboard_shoot_last_key_count = key_count;
-
-    keyboard_shoot_fire_active = 0;
-    if (!keyboard_shoot_allowed)
-    {
-        shoot_cmd_send.shoot_mode = SHOOT_OFF;
-        shoot_cmd_send.friction_mode = FRICTION_OFF;
-        shoot_cmd_send.load_mode = LOAD_STOP;
-    }
-    else if (rc_data[TEMP].mouse.press_l)
-    {
-        // The left mouse button reuses the friction-wheel start action and adds feeding.
-        shoot_cmd_send.shoot_mode = SHOOT_ON;
-        shoot_cmd_send.friction_mode = FRICTION_ON;
-        shoot_cmd_send.load_mode = LOAD_BURSTFIRE;
-        shoot_cmd_send.shoot_rate = 8;
-        keyboard_shoot_fire_active = 1;
-    }
+    const uint8_t drive = ready && switch_is_down(input->rc.switch_left);
+    if (drive)
+        RemoteControlSet(input);
     else
     {
-        // F controls pre-spin; feeding is only enabled by the left mouse button.
-        shoot_cmd_send.shoot_mode = shoot_cmd_send.friction_mode == FRICTION_ON
-                                         ? SHOOT_ON
-                                         : SHOOT_OFF;
-        shoot_cmd_send.load_mode = LOAD_STOP;
+        /* 遥控器重新接管时，原低通从零使用当前摇杆，防止带回离线前的速度。 */
+        vx_cmd_lpf = 0.0f;
+        wz_cmd_lpf = 0.0f;
+    }
+
+#if WHEELLEG_REMOTE_MODE == WHEELLEG_REMOTE_SBUS
+#if WHEELLEG_JUMP_ENABLE
+    /* 上电、掉线或急停后先见到在线松杆，防止旧的拉杆跨控制源重放。 */
+    static uint8_t jump_input_armed;
+    if (!ready)
+        jump_input_armed = 0;
+    else if (input->rc.rocker_l_ >= -400)
+    {
+        jump_input_armed = 1;
+        chassis_cmd_send.jump_command = CHASSIS_JUMP_RELEASED;
+    }
+    else if (jump_input_armed)
+    {
+        chassis_cmd_send.jump_command = CHASSIS_JUMP_HELD;
+    }
+#endif
+    /* 逐侧触阶请求只由本次遥控行驶中的 SW1 上→下触发。 */
+    static uint8_t sw1_seen_up;
+    const uint8_t sw1 = input->rc.switch_b;
+    if (!drive)
+        sw1_seen_up = 0u;
+    else if (switch_is_up(sw1))
+        sw1_seen_up = 1u;
+    else if (!switch_is_mid(sw1))
+    {
+        if (switch_is_down(sw1) && sw1_seen_up)
+            ++chassis_cmd_send.step_window_request;
+        sw1_seen_up = 0u;
+    }
+#endif
+}
+#endif
+
+#if WHEELLEG_REMOTE_HAS_VT02
+#define MOUSE_KEY_VX_MAX 0.30f       /* m/s，首轮台架初值，UNTESTED */
+#define MOUSE_KEY_WZ_MAX 0.80f       /* rad/s，首轮台架初值，UNTESTED */
+#define MOUSE_WZ_PER_COUNT 0.04f
+#define MOUSE_SAMPLE_MAX_AGE_MS 40u
+
+typedef struct
+{
+    uint16_t keys;
+    int16_t mouse_x;
+    uint8_t online;
+    uint8_t resync;
+    uint8_t stop_pending;
+} MouseKeyInput;
+
+/* 键鼠操作只使用已解码的输入，接收链路与在线仲裁由调用方处理。 */
+static void MouseKeySet(MouseKeyInput input, uint8_t selected)
+{
+    static uint8_t armed;
+    static uint8_t neutral_seen;
+    static uint16_t previous_keys;
+    static float leg_length = 0.25f;
+
+    uint16_t keys = input.keys;
+
+    if (!selected || !input.online || input.resync)
+    {
+        /* 离开键鼠或链路超时后清许可，下次接管需要中性输入和新的 R 按下沿。 */
+        armed = 0u;
+        neutral_seen = 0u;
+        previous_keys = keys;
+    }
+    if (!selected)
+    {
+        leg_length = 0.25f;
+        return;
+    }
+
+    uint16_t pressed = keys & (uint16_t)~previous_keys;
+    previous_keys = keys;
+
+    /* 急停优先，连帧中的 B 即使已释放也必须在本拍生效。 */
+    if (input.stop_pending || (input.online && (keys & (1u << Key_B))))
+    {
+        mouse_key_stopped = 1u;
+        armed = 0u;
+        neutral_seen = 0u;
+        leg_length = 0.25f;
+    }
+    else if (input.online && !armed && !rc_stopped)
+    {
+        if (keys == 0u && input.mouse_x == 0)
+            neutral_seen = 1u;
+
+        if (neutral_seen && input.mouse_x == 0 &&
+            keys == (1u << Key_R) && (pressed & (1u << Key_R)))
+        {
+            mouse_key_stopped = 0u;
+            armed = 1u;
+        }
+    }
+    else if (input.online && armed)
+    {
+        switch (pressed & ((1u << Key_Z) | (1u << Key_X) | (1u << Key_C)))
+        {
+        case (1u << Key_Z): leg_length = 0.15f; break;
+        case (1u << Key_X): leg_length = 0.25f; break;
+        case (1u << Key_C): leg_length = 0.35f; break;
+        default: break;
+        }
+    }
+
+    const uint8_t can_drive = input.online && armed && !rc_stopped && !mouse_key_stopped;
+    chassis_cmd_send.leg_length_target = leg_length;
+
+    if (can_drive)
+    {
+        const int forward = ((keys >> Key_W) & 1) - ((keys >> Key_S) & 1);
+        const int turn = ((keys >> Key_A) & 1) - ((keys >> Key_D) & 1);
+        chassis_cmd_send.vx = forward * MOUSE_KEY_VX_MAX;
+        if (keys & ((1u << Key_A) | (1u << Key_D)))
+            chassis_cmd_send.wz = turn * MOUSE_KEY_WZ_MAX;
+        else
+        {
+            /* 鼠标向右为正，底盘左转为正。 */
+            float mouse_wz = -input.mouse_x * MOUSE_WZ_PER_COUNT;
+            LIMIT_MIN_MAX(mouse_wz, -MOUSE_KEY_WZ_MAX, MOUSE_KEY_WZ_MAX);
+            chassis_cmd_send.wz = mouse_wz;
+        }
+
+        /* 输入归零时使用普通站立锁定，沿用底盘自己的里程和航向锚定。 */
+        if (chassis_cmd_send.vx != 0.0f || chassis_cmd_send.wz != 0.0f)
+            chassis_cmd_send.chassis_mode = CHASSIS_WHEELLEG_DRIVE;
     }
 }
+#endif
 
-/**
- * @brief  紧急停止: 急停开关(SwA/switch_right)下拨进入零力急停;
- *         遥控器掉线时由 RobotCMDTask 置零行驶目标保持站立。
- *         零力语义由 chassis.c 落实: 边沿触发对 6 个电机停机,机器人趴下。
- */
-static void EmergencyHandler()
+static void ChassisControlSet(void)
 {
-    if (switch_is_down(rc_data[TEMP].rc.switch_right) || robot_state == ROBOT_STOP)
-    {
-        robot_state = ROBOT_STOP;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_ZERO_FORCE;
+    chassis_cmd_send.jump_command = CHASSIS_JUMP_CANCEL;
+    chassis_cmd_send.vx = 0.0f;
+    chassis_cmd_send.vy = 0.0f;
+    chassis_cmd_send.wz = 0.0f;
+#if WHEELLEG_REMOTE_MODE == WHEELLEG_REMOTE_NONE
+    chassis_cmd_send.chassis_mode = CHASSIS_STANDING_TEST;
+#else
+    chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
+    chassis_cmd_send.leg_length_target = 0.25f;
+    gimbal_cmd_send.gimbal_mode = GIMBAL_ZERO_FORCE;
+    shoot_cmd_send.shoot_mode = SHOOT_OFF;
+    shoot_cmd_send.friction_mode = FRICTION_OFF;
+    shoot_cmd_send.load_mode = LOAD_STOP;
+
+#if WHEELLEG_REMOTE_HAS_RC
+    RC_ctrl_t rc_input = {0};
+    const uint8_t rc_online = RemoteControlRead(&rc_input);
+    EmergencyHandler(&rc_input, rc_online);
+    RemoteChassisSet(&rc_input, rc_online);
+#elif WHEELLEG_REMOTE_HAS_VT02
+    const uint8_t rc_online = 0u;
+#endif
+#if WHEELLEG_REMOTE_HAS_VT02
+    /* VT‑02 只提供键鼠数据。丢失单帧时，过期的鼠标位移按零处理。 */
+    static uint32_t vt_session;
+    const VTLinkInput vt = VTLinkRead();
+    const MouseKeyInput mouse_key = {
+        .keys = vt.keys,
+        .mouse_x = vt.age_ms < MOUSE_SAMPLE_MAX_AGE_MS ? vt.mouse_x : 0,
+        .online = vt.online,
+        .resync = vt.session != vt_session,
+        .stop_pending = vt.stop_pending,
+    };
+    vt_session = vt.session;
+    /* 遥控器在线时独占底盘指令，包括站立和急停。 */
+    MouseKeySet(mouse_key, !rc_online);
+#endif
+
+    if (rc_stopped || mouse_key_stopped)
         chassis_cmd_send.chassis_mode = CHASSIS_ZERO_FORCE;
-        shoot_cmd_send.shoot_mode = SHOOT_OFF;
-        shoot_cmd_send.friction_mode = FRICTION_OFF;
-        shoot_cmd_send.load_mode = LOAD_STOP;
-        LOGERROR("[CMD] emergency stop!");
-    }
-    // 急停开关拨回[上],恢复正常运行
-    if (switch_is_up(rc_data[TEMP].rc.switch_right))
-    {
-        robot_state = ROBOT_READY;
-        shoot_cmd_send.shoot_mode = SHOOT_OFF;
-        LOGINFO("[CMD] reinstate, robot ready");
-    }
+#endif
 }
 
 /* 机器人核心控制任务,200Hz频率运行(必须高于视觉发送频率) */
@@ -380,84 +460,12 @@ void RobotCMDTask()
 
     // 根据gimbal的反馈值计算云台和底盘正方向的夹角,不需要传参,通过static私有变量完成
     CalcOffsetAngle();
-#if WHEELLEG_REMOTE_MODE == WHEELLEG_REMOTE_NONE
-    /* 站立调试模式: 不响应任何遥控输入,发布站立测试基线
-     * (chassis侧收到 CHASSIS_STANDING_TEST 后目标全零,仅腿长保持0.25m(rec_l_rise)) */
-    chassis_cmd_send.vx           = 0.0f;
-    chassis_cmd_send.vy           = 0.0f;
-    chassis_cmd_send.wz           = 0.0f;
-    chassis_cmd_send.chassis_mode = CHASSIS_STANDING_TEST;
-#else
-    // SW2 三挡腿长(2026-11-15): 下/中/上 = 0.15/0.25/0.35 m, 每拍刷新防消息残留旧值。
-    // 挡位激活门(同日): 遥控器上电解锁姿态要求全拨杆拨上(SW2 停上位=0.35),
-    // 直接切行驶模式腿长会立刻斜坡 —— 未激活时恒发 0.25 基线(经 chassis
-    // 斜坡回位, 不走"未配置"路径避免阶跃); SW2 首次拨到中间才激活挡位
-    // (中挡=0.25, 解锁手势本身无腿长变化)。
-    // 激活态复位: 遥控器掉线清(重上电又是全上姿态, 必须重新经中间解锁);
-    // 急停清(异常事件后所有许可类状态复位, 恢复起立重锚 0.25 后仍需
-    // 主动确认挡位, 与 prot 武装标志零力沿清零同惯例)。
-    static uint8_t leg_gear_armed = 0;
-    if (!RemoteControlIsOnline() || robot_state == ROBOT_STOP)
-        leg_gear_armed = 0;    /* 掉线/急停期间不激活: 防 SW2 恰停中间时清零/激活每拍对拍 */
-    else if (switch_is_mid(rc_data[TEMP].rc.switch_c))
-        leg_gear_armed = 1;
-    if (!leg_gear_armed)
-        chassis_cmd_send.leg_length_target = 0.25f;
-    else if (switch_is_down(rc_data[TEMP].rc.switch_c))
-        chassis_cmd_send.leg_length_target = 0.15f;
-    else if (switch_is_mid(rc_data[TEMP].rc.switch_c))
-        chassis_cmd_send.leg_length_target = 0.25f;
-    else
-        chassis_cmd_send.leg_length_target = 0.35f;
-    // 模式门控: 行驶使能开关(SW3/switch_left, 2026-11-15 由 SW2 挪来) 下=遥控行驶,
-    // 其余=站立锁定。键鼠控制已随 DT7 链路移除(FS-i6X 无键鼠)。
-    // 注意: 无论哪种模式都必须每拍刷新 chassis_cmd_send,
-    //       否则消息里会残留上一次的旧速度导致松杆后车辆继续移动。
-    if (switch_is_down(rc_data[TEMP].rc.switch_left) && RemoteControlIsOnline())
-        RemoteControlSet();
-    else if (robot_state != ROBOT_STOP) // 站立锁定: 行驶目标清零,原地保持
-    {
-        chassis_cmd_send.vx           = 0.0f;
-        chassis_cmd_send.vy           = 0.0f;
-        chassis_cmd_send.wz           = 0.0f;
-        chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
-    }
-    // 掉线保护: 遥控器离线时同站立锁定(目标清零保持站立);
-    // 若此前已处于急停态, EmergencyHandler 会维持 CHASSIS_ZERO_FORCE 不被覆盖。
-#endif
-
-#if WHEELLEG_REMOTE_MODE != WHEELLEG_REMOTE_NONE
-    EmergencyHandler(); // 处理遥控器急停(NONE模式下无遥控急停源,不编译)
-#endif
-
-#if WHEELLEG_REMOTE_MODE == WHEELLEG_REMOTE_SBUS
-    /* 掉线或退出行驶后，必须重新见到 SW1 上位才受理下拨。序号随指令持续发布，
-     * 底盘无需对齐遥控任务的单拍脉冲。 */
-    static uint8_t sw1_seen_up;
-    const uint8_t sw1 = rc_data[TEMP].rc.switch_b;
-    if (!RemoteControlIsOnline() ||
-        chassis_cmd_send.chassis_mode != CHASSIS_WHEELLEG_DRIVE)
-    {
-        sw1_seen_up = 0;
-    }
-    else if (switch_is_up(sw1))
-    {
-        sw1_seen_up = 1;
-    }
-    else if (!switch_is_mid(sw1))
-    {
-        if (switch_is_down(sw1) && sw1_seen_up)
-            ++chassis_cmd_send.step_window_request;
-
-        sw1_seen_up = 0;
-    }
-#endif
+    ChassisControlSet();
 
     // 设置视觉发送数据,还需增加加速度和角速度数据
     // VisionSetFlag(chassis_fetch_data.enemy_color,,chassis_fetch_data.bullet_speed)
 
     // 推送消息,双板通信,视觉通信等
-    // 其他应用所需的控制数据在remotecontrolsetmode和mousekeysetmode中完成设置
 #ifdef ONE_BOARD
     PubPushMessage(chassis_cmd_pub, (void *)&chassis_cmd_send);
 #endif // ONE_BOARD

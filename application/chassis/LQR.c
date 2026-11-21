@@ -73,9 +73,17 @@ volatile float air_kp_theta = 30.0f; /* N·m/rad */
 volatile float air_kd_theta = 2.0f;  /* N·m·s/rad */
 volatile float air_tp_max = 8.0f;    /* N·m */
 
+float LQR_PositionError(float error, float deadband)
+{
+    if (fabsf(error) <= deadband)
+        return 0.0f;
+    return error - copysignf(deadband, error);
+}
+
 void LQR_calc(const ten_balance_observation *observe, const ten_balance_target *balance_targets,
               const ten_balance_target *step_targets, uint8_t wheel_block_mask,
-              uint8_t step_leg_mask, four_control_data *control_datas)
+              uint8_t step_leg_mask, const LQR_FeedbackOptions_s *options,
+              four_control_data *control_datas)
 {
     float x[10];
     float u[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -90,7 +98,8 @@ void LQR_calc(const ten_balance_observation *observe, const ten_balance_target *
         lqr_k_band--;
     float (*K)[10] = K_sets[lqr_k_band];
 
-    x[0] = observe->s - balance_targets->s_target;
+    x[0] = LQR_PositionError(observe->s - balance_targets->s_target,
+                             options->position_deadband);
     x[1] = observe->ds - balance_targets->ds_target;
     x[2] = observe->yaw - balance_targets->yaw_target;
     x[3] = observe->dyaw - balance_targets->dyaw_target;
@@ -127,7 +136,14 @@ void LQR_calc(const ten_balance_observation *observe, const ten_balance_target *
         }
 
         for (int j = first_col; j < 10; j++)
-            u[i] += rate * K[i][j] * x[j];
+        {
+            float scale = 1.0f;
+            if (i < 2 && j >= 4 && j < 8)
+                scale = options->wheel_theta_scale;
+            else if (i >= 2 && j >= 8)
+                scale = options->hip_pitch_scale;
+            u[i] += rate * K[i][j] * x[j] * scale;
+        }
     }
 
     control_datas->l_Tw = -u[0];

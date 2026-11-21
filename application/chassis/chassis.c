@@ -1,4 +1,5 @@
 #include "chassis.h"
+#include "chassis_jump.h"
 #include "robot_def.h"
 #include "power_control.h"
 #include "n630.h"
@@ -160,7 +161,6 @@ volatile float rec_fold_l_th   = 0.13f;    /* 态6 触发: 平均腿长下限 m(
 volatile float rec_fold_th     = 0.85f;   /* 态6 触发: 双腿 |θ_body| 上限 rad(11-14 零力实测折叠上电角 0.70/0.75, 留 0.1 裕量; 上界<π/2 保轮心在下半圆带内, 短转=轮沿地滚) */
 volatile float dbg_len_l = 0.25f, dbg_len_r = 0.25f; /* ep 读: 状态机当前腿长目标 */
 /* ---- 伸腿防弹(沿用 v2): 腿长误差超带期间 PID 分量钳 ±rec_push_max ---- */
-#define LEG_PID_OUT_MAX  (150.0f)          /* 腿长 PID 分量正常限幅 N */
 volatile float rec_push_band = 0.02f;     /* 误差门限 m */
 volatile float rec_push_max  = 60.0f;     /* 大误差期间 PID 分量限幅 N(60: 前腿承压+左腿摩擦+翻身段共用, 关节力矩约6-9N·m) */
 /* ---- PD 段专用重力前馈: 倒地/顶升期腿不承机体全重(车头分担), 小前馈防平衡点抬高 ---- */
@@ -209,10 +209,13 @@ typedef struct
     uint8_t started;
 } LegVelState_s;
 static LegVelState_s l_legvel, r_legvel;
+#if WHEELLEG_JUMP_ENABLE || WHEELLEG_BALANCE_LEG_VEL_HOLD
+static LegVelState_s l_held_legvel, r_held_legvel;
+#endif
 
 /* Ldot 估计：DM 反馈 500Hz，1kHz 循环里差分隔拍为 0，
  * 必须按"上次变化以来的累计时间"归一，否则均值少一半。 */
-static float LegVelEst(float L, LegVelState_s *st)
+static float LegVelEst(float L, LegVelState_s *st, uint8_t hold_between_samples)
 {
     if (!st->started)
     {
@@ -227,8 +230,9 @@ static float LegVelEst(float L, LegVelState_s *st)
         st->last_L = L;
         st->dt_acc = 0.0f;
     }
-    else
+    else if (!hold_between_samples || st->dt_acc > 0.005f)
     {
+        /* 跳跃的阻尼与 5 ms 保持配套，正常路径按开关选择估计方式。 */
         st->raw = 0.0f;
     }
     st->filt += LEG_VEL_LPF * (st->raw - st->filt);
@@ -498,6 +502,37 @@ static void StepLegMotion_Update(volatile StepLegMotion_s *leg, uint8_t hit,
     leg->theta_body_target = theta_body + error;
 }
 
+#if WHEELLEG_JUMP_ENABLE || WHEELLEG_BALANCE_THETA_LEVEL
+/* 双腿受力拉开摆角差时，按支撑力和腿长增加差模纠偏刚度。 */
+volatile float theta_lvl_k = 15.0f;  /* N·m/rad */
+volatile float theta_lvl_db = 0.01f; /* rad */
+volatile float theta_lvl_max = 15.0f; /* N·m */
+volatile float theta_lvl_scl;
+volatile float theta_lvl_dth;
+volatile float theta_lvl_dbg;
+
+static void ChassisLevelLegs(uint8_t active, four_control_data *control)
+{
+    theta_lvl_dbg = 0.0f;
+    theta_lvl_dth = ten_balance_observe.l_theta - ten_balance_observe.r_theta;
+    const float leg_force = 0.5f * (grf_dbg.F_leg_l + grf_dbg.F_leg_r);
+    const float length = 0.5f * (ten_balance_observe.l_leg_length +
+                                 ten_balance_observe.r_leg_length);
+    /* 估计失效时回到站立增益，避免上一有效腿力放大当前摆矩。 */
+    theta_lvl_scl = 1.0f;
+    if (grf_dbg.valid_mask == GRF_AIR_BOTH)
+        theta_lvl_scl = fminf(8.0f, fmaxf(1.0f, leg_force * length / (50.0f * 0.25f)));
+    if (active)
+    {
+        const float error = LQR_PositionError(theta_lvl_dth, theta_lvl_db);
+        const float torque = -theta_lvl_k * theta_lvl_scl * error;
+        theta_lvl_dbg = fminf(theta_lvl_max, fmaxf(-theta_lvl_max, torque));
+        control->l_Tp += theta_lvl_dbg;
+        control->r_Tp -= theta_lvl_dbg;
+    }
+}
+#endif
+
 void ChassisTask()
 {
     ChassisDbgUpdate();
@@ -516,6 +551,9 @@ void ChassisTask()
         chassis_cmd_recv.step_window_request != last_step_request;
     last_step_request = chassis_cmd_recv.step_window_request;
 
+#if WHEELLEG_JUMP_ENABLE || WHEELLEG_BALANCE_POSITION_HOLD
+    static float position_integral;
+#endif
     static uint8_t zero_force_last = 0;
     static uint8_t last_wheel_block_mask = 0; /* 两侧恢复轮控前重锚里程参考 */
     static uint8_t drive_last = 0; /* 行驶模式锁存,零力恢复时置0强制重新锚定 */
@@ -536,6 +574,12 @@ void ChassisTask()
             step_window_active = 0;
             StepCollision_Reset();
             StepLegMotion_Reset();
+#if WHEELLEG_JUMP_ENABLE
+            ChassisJump_Reset();
+#endif
+#if WHEELLEG_JUMP_ENABLE || WHEELLEG_BALANCE_POSITION_HOLD
+            position_integral = 0.0f;
+#endif
             last_wheel_block_mask = 0;
             /* S7 确认沿: 零力期间任务直接 return, 态7 块内的记录永远执行不到
              * (外部审查实锤"切零力再切出不可达"), 必须在进入沿记录。
@@ -1354,6 +1398,52 @@ void ChassisTask()
         ten_targets.r_leg_length_target = prev_len_r;
 
     const uint8_t wheel_block_mask = step_leg_mask | protected_air_mask;
+    const uint8_t optional_balance = (WHEELLEG_BALANCE_POSITION_HOLD ||
+                                      WHEELLEG_BALANCE_LEG_VEL_HOLD ||
+                                      WHEELLEG_BALANCE_THETA_LEVEL) &&
+                                      prone_rec_state == PRS_DONE && lift_top &&
+                                      !wheel_block_mask;
+    LQR_FeedbackOptions_s feedback = {
+        .position_deadband = WHEELLEG_BALANCE_POSITION_HOLD && optional_balance ? 0.020f : 0.0f,
+        .wheel_theta_scale = 1.0f,
+        .hip_pitch_scale = 1.0f,
+    };
+#if WHEELLEG_JUMP_ENABLE
+    ChassisJumpInput_s jump_input = {
+        .length = {ten_balance_observe.l_leg_length, ten_balance_observe.r_leg_length},
+        /* 与原跳跃状态机一致，判相位使用上一拍滤波速度。 */
+        .velocity = {l_held_legvel.filt, r_held_legvel.filt},
+        .stand_length = rec_l_rise,
+        .return_length = lift_top ? leg_len_cmd_ramp : rec_l_rise,
+        .airborne = GRF_Airborne(),
+        .can_start = lift_top && rec6_anchor &&
+                     fabsf(rec_tht_l) <= 0.01f && fabsf(rec_tht_r) <= 0.01f,
+    };
+    ChassisJumpReference_s jump_ref = {0};
+    if (prone_rec_state == PRS_DONE)
+    {
+        ChassisJump_Update((chassis_jump_cmd_e)chassis_cmd_recv.jump_command,
+                            &jump_input, &jump_ref);
+        if (jump_ref.restart_lift)
+            lift_anchor = lift_top = 0;
+
+        if (jump_ref.length_target > 0.0f)
+        {
+            /* 跳跃的收腿与落地按相位给参考，左右离地位只决定各轮的输出。 */
+            ten_targets.l_leg_length_target = jump_ref.length_target;
+            ten_targets.r_leg_length_target = jump_ref.length_target;
+        }
+        feedback.wheel_theta_scale = jump_ref.wheel_theta_scale;
+        feedback.hip_pitch_scale = jump_ref.hip_pitch_scale;
+        if (jump_ref.active)
+            feedback.position_deadband = 0.020f;
+    }
+    else
+    {
+        ChassisJump_Reset();
+    }
+#endif
+
     const uint8_t wheel_block_l = wheel_block_mask & GRF_AIR_LEFT;
     const uint8_t wheel_block_r = wheel_block_mask & GRF_AIR_RIGHT;
     if (last_wheel_block_mask && !wheel_block_mask && prone_rec_state == PRS_DONE)
@@ -1363,6 +1453,9 @@ void ChassisTask()
         ten_targets.yaw_target = ten_balance_observe.yaw;
     }
     last_wheel_block_mask = wheel_block_mask;
+#if WHEELLEG_JUMP_ENABLE
+    ChassisJump_Reanchor(&ten_balance_observe, &ten_targets);
+#endif
 
     /* 动作目标仅作用于本拍，退出试验后普通平衡不会接到遗留的后摆目标。 */
     ten_balance_target step_targets;
@@ -1391,11 +1484,28 @@ void ChassisTask()
     dbg_len_r = control_targets->r_leg_length_target;
 
     LQR_calc(&ten_balance_observe, &ten_targets, control_targets,
-             wheel_block_mask, step_ref_mask, &four_control_datas);
+             wheel_block_mask, step_ref_mask, &feedback, &four_control_datas);
     chassis_dbg.lqr_u[0] = four_control_datas.l_Tw;
     chassis_dbg.lqr_u[1] = four_control_datas.r_Tw;
     chassis_dbg.lqr_u[2] = four_control_datas.l_Tp;
     chassis_dbg.lqr_u[3] = four_control_datas.r_Tp;
+#if WHEELLEG_JUMP_ENABLE || WHEELLEG_BALANCE_POSITION_HOLD
+    if (feedback.position_deadband > 0.0f && prone_rec_state == PRS_DONE &&
+        !step_leg_mask && !wheel_block_mask && !drive)
+    {
+        /* 和 LQR 共用死区，退出位置保持时清掉旧积分。 */
+        const float error = LQR_PositionError(ten_balance_observe.s - ten_targets.s_target,
+                                              feedback.position_deadband);
+        position_integral += 2.0f * error * 0.001f;
+        LIMIT_MIN_MAX(position_integral, -1.0f, 1.0f);
+        four_control_datas.l_Tw += position_integral;
+        four_control_datas.r_Tw += position_integral;
+    }
+    else
+    {
+        position_integral = 0.0f;
+    }
+#endif
 
     /* ===== 输出覆盖（2026-11-09 重做, 2026-11-14 增态6）=====
      * PD 段不经 LQR（手册第九章: 自救期强制不经 LQR/VMC 平衡通道）:
@@ -1460,12 +1570,23 @@ void ChassisTask()
     }
 
     /* 虚拟腿长力 = 重力前馈 + 腿长 PID；VMC 内部再按修正后的 J^T 映射。 */
-    float l_dot = LegVelEst(ten_balance_observe.l_leg_length, &l_legvel);
-    float r_dot = LegVelEst(ten_balance_observe.r_leg_length, &r_legvel);
+    float l_dot = LegVelEst(ten_balance_observe.l_leg_length, &l_legvel, 0);
+    float r_dot = LegVelEst(ten_balance_observe.r_leg_length, &r_legvel, 0);
+    const uint8_t use_held_velocity = WHEELLEG_BALANCE_LEG_VEL_HOLD && optional_balance;
+#if WHEELLEG_JUMP_ENABLE || WHEELLEG_BALANCE_LEG_VEL_HOLD
+    const float l_held_dot = LegVelEst(ten_balance_observe.l_leg_length, &l_held_legvel, 1);
+    const float r_held_dot = LegVelEst(ten_balance_observe.r_leg_length, &r_held_legvel, 1);
+    if (use_held_velocity)
+    {
+        l_dot = l_held_dot;
+        r_dot = r_held_dot;
+    }
+#endif
+    const float normal_kv = use_held_velocity ? JUMP_LEG_KV_VEL : leg_kv_vel;
     const float l_length_error = control_targets->l_leg_length_target - ten_balance_observe.l_leg_length;
     const float r_length_error = control_targets->r_leg_length_target - ten_balance_observe.r_leg_length;
-    float l_pid_out = leg_kp_pos * l_length_error - leg_kv_vel * l_dot;
-    float r_pid_out = leg_kp_pos * r_length_error - leg_kv_vel * r_dot;
+    float l_pid_out = leg_kp_pos * l_length_error - normal_kv * l_dot;
+    float r_pid_out = leg_kp_pos * r_length_error - normal_kv * r_dot;
     /* 腿长误差门限幅(南航金城 stand_PID MaxOut 思路,防恢复段目标跳变弹车):
      * |目标-实测| 超 rec_push_band 期间 PID 分量钳 ±rec_push_max,
      * 误差进带(正常平衡/行驶,误差毫米级)恢复全量 ±LEG_PID_OUT_MAX。 */
@@ -1502,10 +1623,30 @@ void ChassisTask()
         dF_roll = 0.0f;
     four_control_datas.l_Tleg = (wheel_block_l ? 0.0f : grav_ff) + l_pid_out - dF_roll;
     four_control_datas.r_Tleg = (wheel_block_r ? 0.0f : grav_ff) + r_pid_out + dF_roll;
+#if WHEELLEG_JUMP_ENABLE
+    jump_input.velocity[0] = l_held_dot;
+    jump_input.velocity[1] = r_held_dot;
+    if (jump_ref.active)
+    {
+        const float limits[2] = {l_pid_max, r_pid_max};
+        float jump_force[2];
+        ChassisJump_LegForce(&jump_input, jump_ref.length_target, limits, jump_force);
+        /* 接触登阶摆动侧仍取该侧动作参考与轴向力。 */
+        if (!(step_leg_mask & GRF_AIR_LEFT))
+            four_control_datas.l_Tleg = jump_force[0] - dF_roll;
+        if (!(step_leg_mask & GRF_AIR_RIGHT))
+            four_control_datas.r_Tleg = jump_force[1] + dF_roll;
+    }
+#endif
     chassis_dbg.Fleg_cmd[0] = four_control_datas.l_Tleg;
     chassis_dbg.Fleg_cmd[1] = four_control_datas.r_Tleg;
+#if WHEELLEG_JUMP_ENABLE
+    chassis_dbg.Ldot[0] = jump_ref.active ? jump_input.velocity[0] : l_dot;
+    chassis_dbg.Ldot[1] = jump_ref.active ? jump_input.velocity[1] : r_dot;
+#else
     chassis_dbg.Ldot[0] = l_dot;
     chassis_dbg.Ldot[1] = r_dot;
+#endif
     chassis_dbg.Roll = chassis_IMU_data->Roll;
     chassis_dbg.dFroll = dF_roll;
     chassis_dbg.theta_body[0] = l_theta_body;
@@ -1531,6 +1672,15 @@ void ChassisTask()
         four_control_datas.r_Tleg = 0.0f;
     }
 
+#if WHEELLEG_JUMP_ENABLE || WHEELLEG_BALANCE_THETA_LEVEL
+    uint8_t level_legs = WHEELLEG_BALANCE_THETA_LEVEL && optional_balance;
+#if WHEELLEG_JUMP_ENABLE
+    if (jump_ref.active)
+        level_legs = jump_ref.level_legs;
+#endif
+    ChassisLevelLegs(!out_gate && prone_rec_state == PRS_DONE && !step_leg_mask && level_legs,
+                     &four_control_datas);
+#endif
     VMC_Calc(&four_control_datas, &r_leg_motor_torques, &r_leg);
     l_VMC_Calc(&four_control_datas, &l_leg_motor_torques, &l_leg);
 

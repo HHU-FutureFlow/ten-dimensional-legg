@@ -39,6 +39,7 @@ extern volatile float l_wheel_direction;
  * （实测两腿稳在 0.27 m 而非目标 0.30，偏离 LQR 设计工作点）。
  * 与腿长 PID 输出相加后作为 VMC 的虚拟腿长力 F。 */
 #define LEG_GRAVITY_FF    (50.0f)
+#define LEG_PID_OUT_MAX   (150.0f) /* 腿长反馈分量的全量限幅，单位 N。 */
 
 /* 腿长 P-P 级联（手册 §8.1）：F = FF + Kp*(Ldes-L) - Kv*Ldot
  * volatile 全局: 支持 ep 在线整定,无需重编译烧录。

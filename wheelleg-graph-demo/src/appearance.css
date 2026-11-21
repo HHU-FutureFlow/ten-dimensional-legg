@@ -1,0 +1,82 @@
+.function-node[data-custom-background],
+.annotation-board[data-custom-background] {
+  background: var(--block-bg);
+  color: var(--block-fg);
+}
+.group-frame[data-custom-background] { background: color-mix(in srgb, var(--block-bg) 35%, transparent); }
+.group-frame[data-custom-background]:not([data-custom-header]) > .group-header {
+  background: #253535;
+  border-radius: 8px 8px 0 0;
+}
+
+.function-node[data-custom-background] :is(.node-description, .node-footer, .port-name, .port-name small, .explanation-row strong, .explanation-row p, .explanation-row ol, .node-source, .node-source small, .explanation-toggle, .node-enter),
+.annotation-board[data-custom-background] .board-content :is(h1, h2, h3, p, code, th, td, a, blockquote) {
+  color: var(--block-fg);
+}
+.function-node[data-custom-background] :is(.node-source, .explanation-toggle, .node-enter),
+.annotation-board[data-custom-background] .board-content :is(code, pre, th) {
+  background: color-mix(in srgb, var(--block-fg) 10%, var(--block-bg));
+}
+.function-node[data-custom-background] :is(.node-header, .node-explanation, .node-source, .node-footer, .explanation-toggle, .node-enter),
+.annotation-board[data-custom-background] .board-content :is(th, td, hr, blockquote) {
+  border-color: color-mix(in srgb, var(--block-fg) 28%, var(--block-bg));
+}
+.function-node[data-custom-background]:not(.kind-boundary-input, .kind-boundary-output) .node-header svg {
+  color: var(--block-fg);
+}
+
+[data-custom-header] > :is(.node-header, .board-header, .group-header) {
+  background: var(--block-header);
+  color: var(--block-header-fg);
+  border-radius: 8px 8px 0 0;
+}
+[data-custom-header] > :is(.node-header, .board-header, .group-header) :is(svg, button) {
+  color: var(--block-header-fg);
+}
+[data-custom-header] > .board-header > span {
+  color: var(--block-header-fg);
+  background: color-mix(in srgb, var(--block-header-fg) 10%, var(--block-header));
+}
+[data-custom-header] > :is(.node-header, .group-header) .icon-button:hover {
+  background: color-mix(in srgb, var(--block-header-fg) 18%, var(--block-header));
+}
+.function-node[data-custom-background][data-custom-header] .node-header svg { color: var(--block-header-fg); }
+.function-node[data-custom-header] .node-dot { box-shadow: 0 0 0 1px var(--block-header-fg); }
+
+:is(.function-node, .annotation-board, .group-frame)[data-custom-border] { border-color: var(--block-border); }
+:is(.function-node, .annotation-board, .group-frame)[data-custom-border].is-selected {
+  box-shadow: 0 0 0 1px #141b22, 0 0 0 3px #70d8ce;
+}
+.appearance-dialog {
+  width: min(442px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  color: #dde6ee;
+  background: #1c2630;
+  border: 1px solid #465867;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 24px 70px #0008;
+}
+.appearance-dialog::backdrop { background: #0a1119a6; }
+.appearance-dialog form { display: grid; gap: 12px; }
+.appearance-heading { display: flex; align-items: baseline; gap: 12px; }
+.appearance-heading span { color: #a9bbc9; overflow-wrap: anywhere; }
+.appearance-preview { border: 1px solid var(--block-border); border-radius: 7px; overflow: hidden; }
+.appearance-preview strong { display: block; padding: 8px 11px; background: var(--block-header); color: var(--block-header-fg); }
+.appearance-preview span { display: block; padding: 8px 11px; background: var(--block-bg); color: var(--block-fg); }
+.appearance-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.appearance-presets .button { justify-content: flex-start; padding: 6px; }
+.appearance-presets i { height: 14px; width: 14px; border-radius: 3px; border: 1px solid; }
+.appearance-field { display: grid; grid-template-columns: 64px 34px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.appearance-field input { min-width: 0; background: #131d27; border: 1px solid #445769; border-radius: 5px; height: 32px; color: #dde6ee; }
+.appearance-field input[type=color] { width: 34px; cursor: pointer; padding: 2px; }
+.appearance-field input[type=text] { padding: 0 7px; font-family: Consolas, monospace; }
+.appearance-field .button { padding: 7px 9px; }
+.appearance-hint { font-size: 11px; color: #a9bbc9; }
+.appearance-error { color: #ffc0c0; font-size: 12px; }
+.appearance-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.appearance-actions > :first-child { margin-right: auto; }
+.toolbar-actions > .appearance-button { display: inline-flex !important; }
+@media (max-width: 620px) {
+  .toolbar-actions > .appearance-button { padding: 5px; }
+}

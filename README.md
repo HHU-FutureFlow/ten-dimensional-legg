@@ -198,6 +198,16 @@ app、module和bsp都有相应的rtos任务。其中bsp为创建任务提供了�
 
 
 
+## 轮腿工程地图
+
+当前底盘视图随仓库提供。使用仓内查看器可浏览遥控、观测、GRF、LQR、自起、登阶和跳跃的信号流。
+
+1. 用 Node.js 24 或更高版本，在查看器目录执行 `npm ci`、`npm run build` 和 `npm start`。Windows 也可双击查看器的 `scripts/start.cmd`。
+2. 在浏览器导入工程地图，或在查看器目录运行 `npm run graph -- import --file ../十维轮腿底盘工程地图.graph.json`。
+3. 在节点的关联资料中查看文件和行号。图里的 `firmware` 指本固件仓库根目录。
+
+[工程地图](十维轮腿底盘工程地图.graph.json) · [查看器使用说明](wheelleg-graph-demo/README.md) · [统一 agent 规则](AGENTS.md)
+
 ## 开发工具
 
 介绍完整的工作流。

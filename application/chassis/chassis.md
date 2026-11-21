@@ -32,3 +32,22 @@ SBUS 遥控下，机体完成自起并站稳后将 SW3 置为行驶。SW1 从上
 GRF 继续观测并为碰撞检测筛选样本。离地门控只作用于由正常平衡 LQR 控制的侧，已开始动作的侧由登阶状态机控制。清除旧离地标记后沿用正常检测节拍。姿态到位时的踏面接触位置和接管位移由现场确认。
 
 EP 记录 `step_collision_dbg.hit_mask`、`last_hit_tick`、`step_leg_motion[0/1].phase`、`theta_body_target`、`dbg_len_l/r`、左右实测腿长、`chassis_dbg.theta_body`、`Tw_cmd` 和 `grf_dbg` 的 `F_n_l`、`F_n_r`、`valid_mask`、`air_mask`。碰撞掩码 1 为左、2 为右、3 为双侧，动作相位 0/1/2/3/4 分别为待机、后摆、收短、回摆、准备位。双侧接管时清动作相位，EP 可能同一帧看到两相位回 0、轮控恢复。轮端净空和实际踏面接触位置由现场确认。
+
+## SBUS 跳跃试验
+
+在 robot_def.h 将 WHEELLEG_JUMP_ENABLE 设为 1 后重新构建。默认构建关闭跳跃。
+上电、遥控重连或解除急停后，先让左杆竖直通道退出拉杆区，再拉杆蹲伏。
+在自起收尾完成后，拉杆使两腿蹲伏。两腿长度和速度连续达标 100 ms 后，
+有效松杆持续 100 ms 才转入蹬伸。蹲伏时失去输入授权会取消蹬伸并回站立。
+急停清动作状态和回位参考。接触式登阶仍使用 SW1 开窗和每侧碰撞检测。
+
+跳跃相位读取 GRF_Airborne 的双侧离地确认。左右轮仍各用自己的离地位
+门控，并各自恢复轮力矩。收腿以原同事相位条件运行；从原快速判据换到主工程
+GRF 后的蹬伸到收腿时序、单侧先接地与回位效果均待实车复核。
+
+ChassisJump_Update 生成相位、腿长及 LQR 参考。ChassisJump_LegForce
+使用原跳跃阶段的阻尼参考、积分、限幅和前馈。常态试验可在 robot_def.h
+分别开启 WHEELLEG_BALANCE_THETA_LEVEL（差模）、WHEELLEG_BALANCE_POSITION_HOLD
+（位置保持）、WHEELLEG_BALANCE_LEG_VEL_HOLD（腿速保持和阻尼）。
+跳跃差模和腿速保持属于动作控制。EP 可观测 jump_ph、jump_push_abort、
+jump_shrink_airok、jump_land_touched、chassis_dbg.Fleg_cmd 和 grf_dbg.air_mask。
