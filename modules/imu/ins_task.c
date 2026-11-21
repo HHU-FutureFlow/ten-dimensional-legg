@@ -35,6 +35,59 @@ static float RefTemp = 40; // 恒温设定温度
 
 static void IMU_Param_Correction(IMU_Param_t *param, float gyro[3], float accel[3]);
 
+/* ===== 陀螺 z 轴零偏在线校准（2026-11-12）=====
+ * 为什么需要:
+ *   QuaternionEKF.c:198 把 GyroBias[2] 硬置 0（注释: "z轴通天,无法观测yaw的漂移"），
+ *   ins_task.c:101 use_mag=0（无磁力计）。
+ *   → yaw 是纯陀螺积分，芯片零偏每帧累加，实测抖擞非常明显。
+ *
+ * 做法:
+ *   上电后前 N 帧累加 z 轴角速度求均值当作零偏，之后每帧减掉。
+ *   车必须静止（默认静默期 15s 完全覆盖校准窗口）。
+ *   只动 z 轴；x/y 轴仍由 EKF 自行估计（它们有重力观测，本来就不漂）。
+ *
+ * 为什么能省事:
+ *   零偏是常量项，积分后无限累积；扣掉它就只剩随机噪声，
+ *   随机噪声积分是随机游走（√t 增长），比线性漂移慢一个数量级。
+ *
+ * 调参: gyro_calib_enable=0 可整体关闭；
+ *       gyro_bias_z_dbg 可直接用 EmberProbe 看校准结果
+ *       （典型 BMI088 零偏量级 ±0.01 rad/s，超过 0.05 就要怀疑芯片/焊接）。
+ *
+ * 【2026-11-14 重做】旧做法“跳过 3s 后无条件采 2s 求均值”有致命缺陷:
+ *   若这 2s 内车在动(自起/PUSH 快转), 算出来的就是“零偏 + 平均转动”。
+ *   之后每帧都把它扣掉 -> 车真以 4.66°/s 转时读数正好为 0,
+ *   yaw 冻住, 控制器以为没转, 于是越转越稳。现场表现: 一直原地打转,
+ *   而日志里 dyaw 均值≈ 0、yaw 60s 只变 1.5°。
+ * 新做法: 200ms 滑窗 + 双门限判静止, 只有窗口内
+ *           |均值| < GYRO_CALIB_MEAN_MAX  且  峰峰值 < GYRO_CALIB_PP_MAX
+ *         才把窗均值锁成零偏; 任何一帧不满足就丢窗重来。
+ *         关键: 只靠峰峰值不够 —— 匀速旋转的峰峰值也是 0,
+ *               所以必须同时看均值(匀速转动会被均值门限拦住)。
+ *         超时(30s 都拿不到干净窗)则 bias 保持 0 —— 宁可让它诚实漂,
+ *         也不能冻住 yaw(冻住比漂更危险, 因为控制器永远看不到转动)。
+ * gyro_calib_done_dbg: 1 = 正常锁定, 2 = 超时兜底(bias=0) */
+#define GYRO_CALIB_SKIP      3000    /* 跳过前 3s: 等 BMI088 上电稳定 */
+#define GYRO_CALIB_WIN        200    /* 静窗长度 200 拍 = 200ms @1kHz */
+#define GYRO_CALIB_PP_MAX     0.04f  /* 窗内峰峰值上限 rad/s (0.04 = 2.3°/s) */
+#define GYRO_CALIB_MEAN_MAX   0.03f  /* 窗均值绝对值上限 rad/s (0.03 = 1.7°/s) */
+#define GYRO_CALIB_TIMEOUT   30000   /* 30s 拿不到干净窗就兑底 */
+volatile uint16_t gyro_calib_frames = 2000;   /* 已废弃(旧固定窗口长度), 保留变量避免旧 Watch 报错 */
+volatile uint8_t  gyro_calib_enable = 1;      /* 0 = 关闭校准 */
+volatile float    gyro_bias_z_dbg   = 0.0f;   /* 校准结果，供 EmberProbe 观测 */
+volatile uint8_t  gyro_calib_done_dbg = 0;    /* 1 = 已锁定, 2 = 超时兑底 */
+volatile float    gyro_calib_mean_dbg = 0.0f; /* 最后一窗的均值, 用于在线观察 */
+volatile float    gyro_calib_pp_dbg   = 0.0f; /* 最后一窗的峰峰值 */
+volatile uint16_t gyro_calib_tries_dbg = 0;   /* 已丢弃的窗数 */
+static float    gyro_bias_z    = 0.0f;
+static float    gyro_win_sum   = 0.0f;
+static float    gyro_win_min   = 0.0f;
+static float    gyro_win_max   = 0.0f;
+static uint16_t gyro_win_cnt   = 0;
+static uint16_t gyro_calib_cnt = 0;
+static uint32_t gyro_calib_timeout = 0;
+static uint8_t  gyro_calib_done = 0;
+
 static void IMUPWMSet(uint16_t pwm)
 {
     __HAL_TIM_SetCompare(&htim10, TIM_CHANNEL_1, pwm);
@@ -138,6 +191,74 @@ void INS_Task(void)
 
         // demo function,用于修正安装误差,可以不管,本demo暂时没用
         IMU_Param_Correction(&IMU_Param, INS.Gyro, INS.Accel);
+
+        /* ---- 陀螺 z 轴零偏校准（2026-11-14 重做为静止窗口检测）----
+         * 必须在 IMU_QuaternionEKF_Update 之前执行。详见文件头部注释。 */
+        if (!gyro_calib_done)
+        {
+            if (!gyro_calib_enable)
+            {
+                gyro_calib_done     = 1;
+                gyro_calib_done_dbg = 1;         /* 手动关闭, 不抹零偏 */
+            }
+            else if (gyro_calib_cnt < GYRO_CALIB_SKIP)
+            {
+                gyro_calib_cnt++;                /* 热机期, 先不采 */
+            }
+            else
+            {
+                float gz = INS.Gyro[Z];
+
+                if (gyro_win_cnt == 0)
+                {
+                    gyro_win_min = gz;
+                    gyro_win_max = gz;
+                }
+                if (gz < gyro_win_min) gyro_win_min = gz;
+                if (gz > gyro_win_max) gyro_win_max = gz;
+                gyro_win_sum += gz;
+                gyro_win_cnt++;
+                gyro_calib_timeout++;
+
+                if (gyro_win_cnt >= GYRO_CALIB_WIN)
+                {
+                    float mean = gyro_win_sum / (float)GYRO_CALIB_WIN;
+                    float pp   = gyro_win_max - gyro_win_min;
+                    gyro_calib_mean_dbg = mean;
+                    gyro_calib_pp_dbg   = pp;
+
+                    if (fabsf(mean) < GYRO_CALIB_MEAN_MAX && pp < GYRO_CALIB_PP_MAX)
+                    {
+                        /* 真静止: 锁定零偏 */
+                        gyro_bias_z         = mean;
+                        gyro_bias_z_dbg     = gyro_bias_z;
+                        gyro_calib_done     = 1;
+                        gyro_calib_done_dbg = 1;
+                    }
+                    else
+                    {
+                        /* 车在动(或匀速旋转): 这个窗作废, 重头再来 */
+                        gyro_calib_tries_dbg++;
+                        gyro_win_cnt = 0;
+                        gyro_win_sum = 0.0f;
+                    }
+                }
+
+                if (!gyro_calib_done && gyro_calib_timeout > GYRO_CALIB_TIMEOUT)
+                {
+                    /* 30s 都没静止过: bias 保持 0。
+                     * 宁可让 yaw 诚实滑, 也不能冻住 —— 冻住会让控制器完全失明。 */
+                    gyro_bias_z         = 0.0f;
+                    gyro_bias_z_dbg     = 0.0f;
+                    gyro_calib_done     = 1;
+                    gyro_calib_done_dbg = 2;
+                }
+            }
+        }
+        else
+        {
+            INS.Gyro[Z] -= gyro_bias_z;             /* 每帧扣掉零偏 */
+        }
 
         // 计算重力加速度矢量和b系的XY两轴的夹角,可用作功能扩展,本demo暂时没用
         // INS.atanxz = -atan2f(INS.Accel[X], INS.Accel[Z]) * 180 / PI;

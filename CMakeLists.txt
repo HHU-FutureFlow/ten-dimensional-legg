@@ -32,7 +32,7 @@ add_compile_options(-pipe ${MCU_FLAGS} -Wall -fmessage-length=0 # basic options
                     -ffunction-sections -fdata-sections -fno-common # optimize options 
                     )
 add_link_options(-pipe ${MCU_FLAGS} -T${LINKER_SCRIPT} -Wl,--no-warn-rwx-segments # close RWX warning
-                 -lm -lc -lnosys # lib options
+                 -lm -lc # lib options; syscalls.c/sysmem.c provide the low-level hooks
                  -Wl,--gc-sections -flto -specs=nano.specs -specs=nosys.specs # optimize options
                  -Wl,-Map=${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map -Wl,--cref -Wl,--print-memory-usage # map options
                  ) # if your executable is too large , try option '-s' to strip symbols

@@ -2,18 +2,29 @@
 #define BALANCE_H
 #pragma once
 
+#include <stdint.h>
 
 
 
-//零点标定状态：大腿竖直，小腿伸到最长，此时大腿编码器值与小腿编码器的差值为0
-//β=（两编码器差值）+ （31.17 * 2）*PI/180   单位为rad
-//α= 大腿电机编码器值 - 0.357252  单位为rad
+
+//零点标定（2026-10-28 新标定，标定结果.docx）：
+//α = 大腿电机读数 - 大腿居中(竖直)零点：右 0.62886 / 左 3.49184（固件坐标，左腿已取反）
+//β = -(两编码器差值) + 腿最长姿态偏置：右 1.57548 / 左 6.60945
+//  （腿最长 = 轮心位于髋正下方；对称位形 β = -2α，由旧标定数据验证到 0.01 rad）
 
 
 #define R_LEG_A (0.21f)
 #define R_LEG_B (0.25f)
 #define R_HALF_WHEEL_BASE (0.06f)
 #define R_REDUCTION_RATIO (15.8f)
+
+/* 【2026-11-20】腿长/腿张角保护总开关。
+ * 0 = 不启用(自起/站立/行驶 完全保持旧行为)
+ * 1 = 启用(仅跳跃状态机 JP_* 非 IDLE 时由 chassis 置 1)
+ * 隔离理由: 初版无条件启用硬限位 [0.136, 0.455], 正好卡在
+ *   趴地腿形(伸直 0.46 / 折叠 0.1356)的边缘, 把两腿读数钉死 -> 自起卡死。
+ * 现在只在跳跃时管, 不污染任何通用路径。 */
+extern volatile uint8_t leg_guard_en;
 
 
 
@@ -102,7 +113,7 @@ typedef struct
     float l_Tleg;
     float r_Tleg;
 
-} four_control_data; //LQR的控制向量和PID输出力矩
+} four_control_data; // Tw/Tp 单位为 N·m；Tleg 为虚拟腿长力，单位 N
 
 typedef struct {
     float r_Tf;

@@ -4,6 +4,7 @@
 // Pure functions only: callers own file enumeration, size budgets and I/O.
 
 const path = require("path");
+const { leavesDirectory } = require("./file-identity");
 
 // Matches never start inside a longer identifier (rp2040 in "xrp2040"), but underscores,
 // separators and compiler define flags may precede them: "startup_stm32f407xx.s",
@@ -33,6 +34,7 @@ const TARGET_RULES = Object.freeze([
     rule(`${B}stm32f4`, "stm32f4x.cfg", "stm32f4", "arm"),
     rule(`${B}stm32f7`, "stm32f7x.cfg", "stm32f7", "arm"),
     rule(`${B}stm32c0`, "stm32c0x.cfg", "stm32c0", "arm"),
+    rule(`${B}stm32c5`, "stm32c5x.cfg", "stm32c5", "arm"),
     rule(`${B}stm32g0`, "stm32g0x.cfg", "stm32g0", "arm"),
     rule(`${B}stm32g4`, "stm32g4x.cfg", "stm32g4", "arm"),
     // Dual-bank H7 parts; stm32h7x.cfg alone declares only bank 1.
@@ -77,7 +79,7 @@ const TARGET_RULES = Object.freeze([
 // linker/startup names, which win over free text in build scripts.
 /** @type {ReadonlyArray<[RegExp, number]>} */
 const SOURCE_PRIORITIES = Object.freeze([
-    [/\.ioc$/i, 0],
+    [/\.ioc2?$/i, 0],
     [/\.(?:uvprojx|uvproj|ewp)$/i, 1],
     [/^\.cproject$/i, 1],
     [/^(?:platformio\.ini|sdkconfig)$/i, 1],
@@ -88,9 +90,9 @@ const SOURCE_PRIORITIES = Object.freeze([
 ]);
 // Files that also identify the project root used to pair firmware images with the target.
 const PROJECT_ROOT_SOURCE =
-    /\.(?:ioc|uvprojx|uvproj|ewp)$|^(?:\.cproject|platformio\.ini|sdkconfig|CMakeLists\.txt|Makefile)$/i;
+    /\.(?:ioc2?|uvprojx|uvproj|ewp)$|^(?:\.cproject|platformio\.ini|sdkconfig|CMakeLists\.txt|Makefile)$/i;
 const PROJECT_FILE_GLOB =
-    "**/{*.ioc,*.IOC,*.uvprojx,*.uvproj,*.ewp,.cproject,platformio.ini,sdkconfig,*.ld,startup_*.s,startup_*.S,CMakeLists.txt,Makefile,*.cmake}";
+    "**/{*.ioc,*.IOC,*.ioc2,*.IOC2,*.uvprojx,*.uvproj,*.ewp,.cproject,platformio.ini,sdkconfig,*.ld,startup_*.s,startup_*.S,CMakeLists.txt,Makefile,*.cmake}";
 // Generated, vendored or tool-owned trees; metadata found there does not describe the project.
 const PROJECT_IGNORED_DIRS = Object.freeze([
     "node_modules",
@@ -161,6 +163,7 @@ const DEVICE_FIELDS = Object.freeze([
     /^Mcu\.UserName\s*=\s*(\S+)/im,
     /^Mcu\.CPN\s*=\s*(\S+)/im,
     /^ProjectManager\.DeviceId\s*=\s*(\S+)/im,
+    /"mcuUID"\s*:\s*"(?:[^"\r\n]*::)?([^"\r\n]+)"/i,
     /<Device>\s*([^<]+?)\s*<\/Device>/i,
     /OGChipSelectEditMenu<\/name>\s*<state>([^<\t]+)/i,
     /option\.target_mcu"[^>]*?\bvalue="([^"]+)"/i,
@@ -277,13 +280,15 @@ function elfHeaderInfo(header) {
 function isInside(file, dir) {
     if (!dir) return false;
     const relative = path.relative(dir, file);
-    return !!relative && !relative.startsWith("..") && !path.isAbsolute(relative);
+    return !!relative && !leavesDirectory(relative);
 }
 
 /**
  * Picks the firmware image for a target. Images whose architecture contradicts the target
- * are never chosen; images under the detected project root win over newer images elsewhere.
- * @param {Array<{ file: string, mtimeMs: number, arch: string }>} images
+ * are never chosen; images under the detected project root win over newer images elsewhere,
+ * then images with debug info win over newer stripped (Release) images. `dwarf` is only
+ * `false` when the section headers were checked; unknown ranks like an image with DWARF.
+ * @param {Array<{ file: string, mtimeMs: number, arch: string, dwarf?: boolean }>} images
  * @param {{ target?: string, projectDir?: string }} [options]
  * @returns {{ elf: string, rejected: string[] }}
  */
@@ -292,8 +297,18 @@ function chooseElf(images, options = {}) {
     const compatible = images.filter((image) => !expected || !image.arch || image.arch === expected);
     const rejected = images.filter((image) => !compatible.includes(image)).map((image) => image.file);
     const ranked = compatible
-        .map((image) => ({ ...image, local: isInside(image.file, options.projectDir) ? 0 : 1 }))
-        .sort((a, b) => a.local - b.local || b.mtimeMs - a.mtimeMs || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+        .map((image) => ({
+            ...image,
+            local: isInside(image.file, options.projectDir) ? 0 : 1,
+            stripped: image.dwarf === false ? 1 : 0
+        }))
+        .sort(
+            (a, b) =>
+                a.local - b.local ||
+                a.stripped - b.stripped ||
+                b.mtimeMs - a.mtimeMs ||
+                (a.file < b.file ? -1 : a.file > b.file ? 1 : 0)
+        );
     return { elf: ranked[0]?.file || "", rejected };
 }
 

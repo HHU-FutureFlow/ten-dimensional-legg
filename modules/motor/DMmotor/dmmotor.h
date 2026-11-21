@@ -25,7 +25,9 @@ typedef struct
     float torque;
     float T_Mos;
     float T_Rotor;
-    int32_t total_round;
+    int32_t total_round;     // 反馈 position 越过 ±DM_P_MAX 的次数（12.5 -> -12.5 记 +1）
+    float total_position;    // 多圈展开后的连续位置 = position + total_round * (DM_P_MAX - DM_P_MIN)
+    uint8_t init_flag;       // 收到第一帧反馈后置 1；之前 DMMotorTask 不出力
 }DM_Motor_Measure_s;
 
 typedef struct
@@ -96,4 +98,13 @@ void DMMotorCaliEncoder(DMMotorInstance *motor);
 void DMMotorControlInit();
 void DMMotorSetMode(DMMotor_Mode_e cmd, DMMotorInstance *motor);
 void DMMotorSetCtrlMode(DMMotorInstance *motor, DMMotorCtrlMode_e mode);
+
+/**
+ * @brief 位置模式下，把一个"绝对目标角"换算成离当前位置最近的那个等价指令（差值按 2π 归一化）。
+ *        用于标定常数可能和当前上电落在不同圈的情况，保证电机只走短的那一边，不会多转一整圈。
+ * @param target_abs 目标角，和 measure.total_position 同一参考系（原始方向，未做左右取负）
+ * @param cmd        输出：可直接 DMMotorSetRef 的位置指令（电机 ±DM_P_MAX 参考系）
+ * @return 1 = 可用；0 = 还没收到反馈 / 反馈已跨过 ±12.5 / 指令超出 ±12.5，此时不要下发位置指令
+ */
+uint8_t DMMotorNearestPosRef(DMMotorInstance *motor, float target_abs, float *cmd);
 #endif // !DMMOTOR

@@ -62,3 +62,10 @@ vscode/
 /.tools/
 /compile_commands.json
 /debug.log
+
+# lqr_v2 design toolchain
+__pycache__/
+*.pyc
+
+# EmberProbe capture dumps
+.workbuddy_*.ndjson

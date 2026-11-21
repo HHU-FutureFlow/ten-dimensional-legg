@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("configure", "build", "clean", "download-dap", "download-jlink")]
+    [ValidateSet("configure", "build", "clean", "download-dap", "download-stlink", "download-jlink")]
     [string]$Action = "build",
     [ValidateSet("Debug", "Release", "RelWithDebInfo", "MinSizeRel")]
     [string]$BuildType = "Debug"
@@ -161,12 +161,17 @@ function Clean-Project {
 }
 
 function Download-WithOpenOcd {
+    param(
+        [ValidateSet("openocd_dap.cfg", "openocd_stlink.cfg")]
+        [string]$ConfigFile = "openocd_dap.cfg"
+    )
+
     Build-Project
     $openOcd = Get-BundledTool -RelativePath "tools\OpenOCD-20231002-0.12.0\bin\openocd.exe"
     if (-not $openOcd) {
         $openOcd = Find-Executable -Name "openocd.exe" -EnvironmentVariables @("OPENOCD_PATH")
     }
-    $config = Join-Path $ProjectRoot "openocd_dap.cfg"
+    $config = Join-Path $ProjectRoot $ConfigFile
     $binary = Join-Path $BuildDirectory "$TargetName.bin"
     if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
         throw "Firmware binary not found: $binary"
@@ -198,7 +203,8 @@ try {
         "configure" { Configure-Project }
         "build" { Build-Project }
         "clean" { Clean-Project }
-        "download-dap" { Download-WithOpenOcd }
+        "download-dap" { Download-WithOpenOcd -ConfigFile "openocd_dap.cfg" }
+        "download-stlink" { Download-WithOpenOcd -ConfigFile "openocd_stlink.cfg" }
         "download-jlink" { Download-WithJLink }
     }
 }

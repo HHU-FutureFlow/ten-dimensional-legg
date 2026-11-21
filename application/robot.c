@@ -39,7 +39,7 @@ void RobotInit()
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     ChassisInit();
     GimbalInit();
-    ShootInit();
+    // ShootInit();
 #endif
 
     OSTaskInit(); // 创建基础任务
@@ -57,9 +57,14 @@ void RobotTask()
 #endif
 
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
-    ChassisTask();
-    GimbalTask();
-    ShootTask();
+    /* ChassisTask 已挪到独立的 1 kHz 任务(StartCHASSISTASK),不在这里调用,
+     * 否则会跑两遍。
+     * GimbalTask/ShootTask 必须与 GimbalInit/ShootInit 配套:轮腿没有云台和
+     * 发射机构,ShootInit 已注释,而 ShootTask 会对未初始化的 loader /
+     * shoot_can_comm 空指针读写 → BusFault → ROBOT 任务死,遥控链路不通。
+     * (对照 develop 双板工程:那边每个被调用的任务都有配套 Init。) */
+    // GimbalTask();
+    // ShootTask();
 #endif
 
 }
