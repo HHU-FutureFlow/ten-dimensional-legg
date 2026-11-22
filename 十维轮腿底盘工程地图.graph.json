@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "projectId": "project_71e858ce-e5b7-4270-a711-44001f676b6b",
   "title": "十维轮腿底盘 · 工程地图",
-  "revision": 155,
+  "revision": 177,
   "rootSceneId": "root",
   "sourceRoots": {
     "firmware": {
@@ -15,7 +15,7 @@
         "sceneId": "root",
         "id": "command",
         "label": "遥控与命令生成",
-        "description": "SBUS、DBUS 与 VT‑02 的命令仲裁。SBUS 同时发布独立的跳跃和触阶意图。",
+        "description": "普通固件启用。SBUS、DBUS 与 VT‑02 的命令仲裁。SBUS 同时发布独立的跳跃和触阶意图。",
         "kind": "input",
         "status": "implemented",
         "sourceRefs": [
@@ -68,10 +68,10 @@
           {
             "rootId": "firmware",
             "path": "application/robot_def.h",
-            "line": 207,
-            "endLine": 222,
+            "line": 212,
+            "endLine": 227,
             "symbol": "Chassis_Ctrl_Cmd_s",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -89,17 +89,17 @@
         "sceneId": "root",
         "id": "control",
         "label": "底盘闭环 · 1 kHz",
-        "description": "底盘按侧保护轮输出，跳跃与接触式登阶各自生成动作参考。",
+        "description": "普通固件的自起、站立、平衡和运动控制。",
         "kind": "control",
         "status": "implemented",
         "sourceRefs": [
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 536,
-            "endLine": 1763,
+            "line": 531,
+            "endLine": 1758,
             "symbol": "ChassisTask",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -118,7 +118,7 @@
         "sceneId": "root",
         "id": "drive",
         "label": "电机协议与发送",
-        "description": "关节 CAN1，驱动轮 CAN2。",
+        "description": "关节 CAN1，驱动轮 CAN2。普通和台架固件共用电机任务与反馈。",
         "kind": "output",
         "status": "implemented",
         "sourceRefs": [
@@ -141,10 +141,12 @@
         ],
         "metadata": {
           "explanation": {
-            "receives": "力矩/电流码参考、停机边沿和 CAN 反馈。",
-            "process": "驱动任务独立编码并发送，CAN 中断更新测量。",
+            "receives": "当前固件分支提供的力矩、电流码和停止状态，以及 CAN 反馈。",
+            "process": "驱动任务编码发送，CAN 中断更新反馈缓存。",
             "produces": "MIT 指令、C620 组帧和反馈缓存。",
-            "decisions": []
+            "decisions": [
+              "停止状态生效 → 对应通道发送零参考。"
+            ]
           }
         },
         "detailSceneId": "drive-path"
@@ -153,7 +155,7 @@
         "sceneId": "root",
         "id": "timing",
         "label": "上电与任务调度",
-        "description": "STM32F407 · FreeRTOS · 单控制板。",
+        "description": "STM32F407 与 FreeRTOS 按构建模式进入普通闭环或零力台架。",
         "kind": "algorithm",
         "status": "implemented",
         "sourceRefs": [
@@ -167,19 +169,38 @@
           },
           {
             "rootId": "firmware",
+            "path": "application/robot.c",
+            "line": 24,
+            "endLine": 54,
+            "symbol": "RobotInit",
+            "revision": "c2da24e + 台架工作区"
+          },
+          {
+            "rootId": "firmware",
             "path": "application/robot_task.h",
-            "line": 40,
-            "endLine": 148,
-            "symbol": "OSTaskInit / StartCHASSISTASK",
-            "revision": "b64b9b5"
+            "line": 46,
+            "endLine": 85,
+            "symbol": "OSTaskInit",
+            "revision": "c2da24e + 预定位与 V2 台架工作区"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/robot_task.h",
+            "line": 162,
+            "endLine": 182,
+            "symbol": "StartCHASSISTASK",
+            "revision": "c2da24e + 预定位与 V2 台架工作区"
           }
         ],
         "metadata": {
           "explanation": {
-            "receives": "上电、时钟和 CubeMX 外设配置。",
-            "process": "初始化 BSP、应用、设备实例和任务。",
-            "produces": "命令 5 ms，底盘/惯导/轮驱动各 1 ms 延时，守护 10 ms。",
-            "decisions": []
+            "receives": "上电、CubeMX 外设配置、编译期应用选择。",
+            "process": "初始化 BSP 和对应应用，再创建任务。",
+            "produces": "底盘循环、电机发送和守护任务；普通版还创建命令、惯导和 UI 任务。",
+            "decisions": [
+              "WHEELLEG_DEBUG_MODE=0 → 正常底盘控制。",
+              "WHEELLEG_DEBUG_MODE=1 → 零力台架与摩擦测定。"
+            ]
           }
         },
         "detailSceneId": "boot-path"
@@ -188,25 +209,25 @@
         "sceneId": "root",
         "id": "services",
         "label": "观测、守护与外围",
-        "description": "RTT / EP 观测、视觉 VCP、裁判 UI 与框架模块。",
+        "description": "EP 读取试验、预定位和双侧保持状态，提交试验力矩、归零、撤力和故障复位。",
         "kind": "algorithm",
         "status": "implemented",
         "sourceRefs": [
           {
             "rootId": "firmware",
             "path": "application/robot_task.h",
-            "line": 70,
-            "endLine": 160,
+            "line": 80,
+            "endLine": 174,
             "symbol": "任务入口",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 275,
-            "endLine": 303,
+            "line": 276,
+            "endLine": 304,
             "symbol": "ChassisDbgUpdate / ChassisDbgLqr",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -257,10 +278,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 305,
-            "endLine": 384,
+            "line": 306,
+            "endLine": 376,
             "symbol": "ChassisInit",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -285,7 +306,7 @@
         "sceneId": "root",
         "id": "build",
         "label": "构建、离线建模与调试",
-        "description": "工程构建、K 求解、调试资料入口。",
+        "description": "可移植构建生成普通或台架固件，离线建模提供 K 及参数来源。",
         "kind": "algorithm",
         "status": "implemented",
         "sourceRefs": [
@@ -300,10 +321,10 @@
           {
             "rootId": "firmware",
             "path": "CMakeLists.txt",
-            "line": 71,
-            "endLine": 111,
+            "line": 76,
+            "endLine": 125,
             "symbol": "源码与固件产物",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -312,6 +333,14 @@
             "endLine": 24,
             "symbol": "离线求解",
             "revision": "b64b9b5"
+          },
+          {
+            "rootId": "firmware",
+            "path": "PORTABLE_BUILD.md",
+            "line": 47,
+            "endLine": 57,
+            "symbol": "台架构建",
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -348,9 +377,9 @@
             "rootId": "firmware",
             "path": "application/robot_def.h",
             "line": 28,
-            "endLine": 60,
+            "endLine": 65,
             "symbol": "当前默认 SBUS",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -622,9 +651,9 @@
             "rootId": "firmware",
             "path": "application/robot_def.h",
             "line": 28,
-            "endLine": 60,
+            "endLine": 65,
             "symbol": "编译选项",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -679,9 +708,9 @@
             "rootId": "firmware",
             "path": "application/robot_def.h",
             "line": 19,
-            "endLine": 70,
+            "endLine": 75,
             "symbol": "编译选择",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -752,17 +781,17 @@
         "sceneId": "boot-path",
         "id": "init",
         "label": "RobotInit 与注册",
-        "description": "关中断完成 BSP 和应用实例初始化。",
+        "description": "共用 BSP 和六电机注册。台架初始化直接置零待试。",
         "kind": "algorithm",
         "status": "implemented",
         "sourceRefs": [
           {
             "rootId": "firmware",
             "path": "application/robot.c",
-            "line": 22,
-            "endLine": 48,
+            "line": 24,
+            "endLine": 54,
             "symbol": "RobotInit",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -775,17 +804,25 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 305,
-            "endLine": 384,
-            "symbol": "ChassisInit",
-            "revision": "2026-11-21 合并工作区"
+            "line": 306,
+            "endLine": 377,
+            "symbol": "ChassisActuatorsInit",
+            "revision": "c2da24e + 台架工作区"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/debug_mode.c",
+            "line": 11,
+            "endLine": 17,
+            "symbol": "DebugModeInit",
+            "revision": "c2da24e + EP 复位台架工作区"
           }
         ],
         "metadata": {
           "explanation": {
-            "receives": "外设句柄、ONE_BOARD 配置。",
-            "process": "DWT 计时、RTT 日志、遥控和底盘初始化；注册话题、惯导、四关节与两轮。",
-            "produces": "对象、队列和任务注册前置状态。",
+            "receives": "BSP 外设和编译期应用选择。",
+            "process": "普通版执行遥控和底盘初始化；台架版注册六电机、写零并置停止。",
+            "produces": "电机实例及应用初态；普通版另初始化遥控命令输入。",
             "decisions": []
           }
         }
@@ -801,10 +838,10 @@
           {
             "rootId": "firmware",
             "path": "application/robot_task.h",
-            "line": 40,
-            "endLine": 72,
+            "line": 46,
+            "endLine": 85,
             "symbol": "OSTaskInit",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 预定位与 V2 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -817,9 +854,9 @@
         ],
         "metadata": {
           "explanation": {
-            "receives": "BSP 和应用实例。",
-            "process": "创建六类任务与逐 DM 实例任务；Init 返回后启动 OS。",
-            "produces": "任务入口和优先级。",
+            "receives": "RobotInit 已建立的应用和驱动实例。",
+            "process": "创建电机、守护和底盘任务。普通版同时创建 ROBOT、INS 和 UI。",
+            "produces": "启动内核后分任务执行。",
             "decisions": []
           }
         }
@@ -828,17 +865,17 @@
         "sceneId": "boot-path",
         "id": "tsk-cmd",
         "label": "ROBOT · 5 ms",
-        "description": "RobotTask → RobotCMDTask。",
+        "description": "普通固件启用。RobotTask → RobotCMDTask。",
         "kind": "algorithm",
         "status": "implemented",
         "sourceRefs": [
           {
             "rootId": "firmware",
             "path": "application/robot_task.h",
-            "line": 113,
-            "endLine": 128,
+            "line": 123,
+            "endLine": 138,
             "symbol": "StartROBOTTASK",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -854,24 +891,32 @@
         "sceneId": "boot-path",
         "id": "tsk-ch",
         "label": "CHASSIS · 1 ms",
-        "description": "AboveNormal，独立运行 ChassisTask。",
+        "description": "按固件走普通闭环或 EP 台架。台架使用独立增大的任务栈。",
         "kind": "algorithm",
         "status": "implemented",
         "sourceRefs": [
           {
             "rootId": "firmware",
             "path": "application/robot_task.h",
-            "line": 134,
-            "endLine": 148,
+            "line": 162,
+            "endLine": 182,
             "symbol": "StartCHASSISTASK",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 预定位与 V2 台架工作区"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/debug_mode.c",
+            "line": 18,
+            "endLine": 21,
+            "symbol": "DebugModeTask",
+            "revision": "c2da24e + EP 复位台架工作区"
           }
         ],
         "metadata": {
           "explanation": {
-            "receives": "任务入口与全局设备实例。",
-            "process": "执行本任务调用链，按源码延时让出 CPU。",
-            "produces": "AboveNormal，独立运行 ChassisTask。",
+            "receives": "FreeRTOS 节拍和编译期应用选择。",
+            "process": "每次唤醒执行对应应用入口，随后延时 1 ms。",
+            "produces": "普通闭环参考或单执行器试验参考；两路共用电机发送任务。",
             "decisions": []
           }
         }
@@ -880,17 +925,17 @@
         "sceneId": "boot-path",
         "id": "tsk-ins",
         "label": "INS · 1 ms",
-        "description": "AboveNormal，INS_Task 后 VisionSend。",
+        "description": "普通固件启用。AboveNormal，INS_Task 后 VisionSend。",
         "kind": "algorithm",
         "status": "implemented",
         "sourceRefs": [
           {
             "rootId": "firmware",
             "path": "application/robot_task.h",
-            "line": 73,
-            "endLine": 91,
+            "line": 83,
+            "endLine": 101,
             "symbol": "StartINSTASK",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -913,10 +958,10 @@
           {
             "rootId": "firmware",
             "path": "application/robot_task.h",
-            "line": 92,
-            "endLine": 111,
+            "line": 102,
+            "endLine": 121,
             "symbol": "StartMOTORTASK",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -965,10 +1010,10 @@
           {
             "rootId": "firmware",
             "path": "application/robot_task.h",
-            "line": 102,
-            "endLine": 122,
+            "line": 112,
+            "endLine": 132,
             "symbol": "StartDAEMONTASK",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -984,17 +1029,17 @@
         "sceneId": "boot-path",
         "id": "tsk-ui",
         "label": "UI · 1 ms",
-        "description": "先 MyUIInit，再 UITask；依赖裁判初始化。",
+        "description": "普通固件启用。先 MyUIInit，再 UITask；依赖裁判初始化。",
         "kind": "algorithm",
         "status": "implemented",
         "sourceRefs": [
           {
             "rootId": "firmware",
             "path": "application/robot_task.h",
-            "line": 150,
-            "endLine": 163,
+            "line": 160,
+            "endLine": 177,
             "symbol": "StartUITASK",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -1237,10 +1282,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 536,
-            "endLine": 624,
+            "line": 531,
+            "endLine": 619,
             "symbol": "零力入口",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -1274,10 +1319,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 628,
-            "endLine": 698,
+            "line": 623,
+            "endLine": 693,
             "symbol": "反馈读入和 yaw 重构",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -1309,10 +1354,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 652,
-            "endLine": 656,
+            "line": 647,
+            "endLine": 651,
             "symbol": "观测调用",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -1339,18 +1384,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 680,
-            "endLine": 1482,
+            "line": 675,
+            "endLine": 1477,
             "symbol": "目标生成 / 恢复 / 触阶",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1412,
+            "line": 1407,
             "symbol": "跳跃输入和参考接入",
-            "revision": "2026-11-21 合并工作区",
-            "endLine": 1446
+            "revision": "c2da24e + 台架工作区",
+            "endLine": 1441
           }
         ],
         "metadata": {
@@ -1401,41 +1446,33 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1517,
-            "endLine": 1671,
-            "symbol": "恢复 PD / 腿轴力 / 全零闸",
-            "revision": "2026-11-21 合并工作区"
+            "line": 1620,
+            "endLine": 1681,
+            "symbol": "恢复摆角 PD 和 LQR 交接",
+            "revision": "c2da24e + 普通模式前馈工作树"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1573,
-            "symbol": "腿速计算",
-            "revision": "2026-11-21 合并工作区",
-            "endLine": 1586
+            "line": 1682,
+            "endLine": 1706,
+            "symbol": "实测腿速阻尼和轴向反馈",
+            "revision": "c2da24e + 普通模式前馈工作树"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1633,
-            "symbol": "跳跃力接入",
-            "revision": "2026-11-21 合并工作区",
-            "endLine": 1651
-          },
-          {
-            "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 1681,
-            "symbol": "差模摆矩接入",
-            "revision": "2026-11-21 合并工作区",
-            "endLine": 1684
+            "line": 1707,
+            "endLine": 1793,
+            "symbol": "承重、跳跃、全零闸及差模",
+            "revision": "c2da24e + 普通模式前馈工作树"
           }
         ],
         "metadata": {
           "explanation": {
             "receives": "LQR 候选、恢复上下文、实测姿态与腿长、跳跃相位参考。",
-            "process": "按恢复状态替换或混合 LQR，按侧选择常态或跳跃轴向力。零力保护后仅对有效阶段加左右反向差模摆矩。",
-            "produces": "最终虚拟轮矩、摆矩和轴向腿力。",
+            "process": "按恢复状态替换或混合 LQR。腿长速度与机体系摆角速度继续提供反馈阻尼，按侧选择常态或跳跃轴向力。零力门控后对有效阶段加入差模摆矩。",
+            "produces": "作为执行器基础力矩来源的轮矩、虚拟摆矩与轴向腿力。",
             "decisions": []
           }
         },
@@ -1445,17 +1482,17 @@
         "sceneId": "chassis-cycle",
         "id": "out",
         "label": "VMC 与执行器命令",
-        "description": "把虚拟量换成电机侧参考。",
+        "description": "把虚拟量换算成带独立摩擦补偿的电机参考。",
         "kind": "output",
         "status": "implemented",
         "sourceRefs": [
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1684,
-            "endLine": 1763,
-            "symbol": "VMC、摩擦补偿与下发",
-            "revision": "2026-11-21 合并工作区"
+            "line": 1791,
+            "endLine": 1851,
+            "symbol": "VMC、摩擦前馈与下发",
+            "revision": "c2da24e + 普通模式前馈工作树"
           },
           {
             "rootId": "firmware",
@@ -1464,21 +1501,13 @@
             "endLine": 35,
             "symbol": "VMC_Calc / l_VMC_Calc",
             "revision": "b64b9b5"
-          },
-          {
-            "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 1681,
-            "symbol": "差模先于 VMC",
-            "revision": "2026-11-21 合并工作区",
-            "endLine": 1686
           }
         ],
         "metadata": {
           "explanation": {
-            "receives": "Tw/Tp/F、腿几何、端口门控和运动反馈。",
-            "process": "VMC 映射腿长力和摆矩并按主工程公式叠加关节摩擦。左右轮分别根据受阻位切除力矩和前馈，再限幅换算电流。",
-            "produces": "关节 N·m、轮电流码和输出观测。",
+            "receives": "虚拟轮矩、摆矩、腿长力、实测几何、有效模式门控及计划运动。",
+            "process": "VMC 把摆矩和腿长力映射到电机轴。关节与车轮分别按计划速度补偿摩擦，并在各自的坐标系和限幅下下发。",
+            "produces": "关节力矩、轮端电流码，以及各执行器的计划速度、基础力矩、有效前馈和最终力矩。",
             "decisions": []
           }
         },
@@ -1495,18 +1524,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 275,
-            "endLine": 303,
+            "line": 276,
+            "endLine": 304,
             "symbol": "ChassisDbgUpdate / ChassisDbgLqr",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1486,
-            "endLine": 1509,
+            "line": 1481,
+            "endLine": 1504,
             "symbol": "原始 LQR 输出",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -1561,10 +1590,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 628,
-            "endLine": 649,
+            "line": 623,
+            "endLine": 644,
             "symbol": "左右反馈取号",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -1588,15 +1617,15 @@
             "rootId": "firmware",
             "path": "application/chassis/balance.c",
             "line": 28,
-            "endLine": 83,
+            "endLine": 45,
             "symbol": "右腿 α、β、摆角及速度",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 2026-11-22 右腿对称标定"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/balance.c",
-            "line": 129,
-            "endLine": 176,
+            "line": 131,
+            "endLine": 178,
             "symbol": "左腿镜像解算",
             "revision": "2026-11-21 合并工作区"
           },
@@ -1612,7 +1641,7 @@
         "metadata": {
           "explanation": {
             "receives": "左右关节多圈角与电机速度。",
-            "process": "从前后关节解算腿张角、长度和摆角。满伸零点附近钳住张角，保留短腿折叠区间。",
+            "process": "先按左右编码器偏置解算关节角，再求腿张角、长度和摆角。右侧偏置按落地后伸对称位形以左侧为基准标定。满伸零点附近钳住张角。",
             "produces": "α、β、腿长、机体系摆角与摆角速度。",
             "decisions": []
           }
@@ -1697,18 +1726,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 40,
-            "endLine": 51,
+            "line": 41,
+            "endLine": 52,
             "symbol": "偏航模型系数",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 692,
-            "endLine": 699,
+            "line": 687,
+            "endLine": 694,
             "symbol": "yaw / dyaw 重建",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -1731,10 +1760,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 645,
-            "endLine": 699,
+            "line": 640,
+            "endLine": 694,
             "symbol": "ChassisTask 观测段",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -1929,10 +1958,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 674,
-            "endLine": 777,
+            "line": 669,
+            "endLine": 772,
             "symbol": "挡位斜坡和行驶参考",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -1959,10 +1988,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 778,
-            "endLine": 1330,
+            "line": 773,
+            "endLine": 1325,
             "symbol": "统一恢复状态机及运行时监控",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -1989,18 +2018,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1331,
-            "endLine": 1391,
+            "line": 1326,
+            "endLine": 1386,
             "symbol": "检测窗口、两侧动作与同拍接管",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 408,
-            "endLine": 503,
+            "line": 403,
+            "endLine": 498,
             "symbol": "StepLegMotion_Update",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -2032,18 +2061,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 432,
-            "endLine": 444,
+            "line": 427,
+            "endLine": 439,
             "symbol": "ActiveMask / ChassisProtectedAirMask",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1393,
-            "endLine": 1461,
+            "line": 1388,
+            "endLine": 1456,
             "symbol": "受阻位与重锚",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2069,26 +2098,26 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1376,
-            "endLine": 1509,
+            "line": 1371,
+            "endLine": 1504,
             "symbol": "接管、控制目标与掩码",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1691,
-            "endLine": 1753,
+            "line": 1686,
+            "endLine": 1748,
             "symbol": "动作相位与轮门控",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1412,
+            "line": 1407,
             "symbol": "跳跃参考与分侧掩码",
-            "revision": "2026-11-21 合并工作区",
-            "endLine": 1469
+            "revision": "c2da24e + 台架工作区",
+            "endLine": 1464
           }
         ],
         "metadata": {
@@ -2146,10 +2175,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 784,
-            "endLine": 837,
+            "line": 779,
+            "endLine": 832,
             "symbol": "有效观测驻留和四路分流",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2176,10 +2205,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 955,
-            "endLine": 999,
+            "line": 950,
+            "endLine": 994,
             "symbol": "PRS_EXTEND",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2205,10 +2234,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1000,
-            "endLine": 1047,
+            "line": 995,
+            "endLine": 1042,
             "symbol": "PRS_ALIGN",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2234,10 +2263,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1048,
-            "endLine": 1126,
+            "line": 1043,
+            "endLine": 1121,
             "symbol": "PRS_PUSH",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2263,10 +2292,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1127,
-            "endLine": 1172,
+            "line": 1122,
+            "endLine": 1167,
             "symbol": "PRS_QUICK",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2292,18 +2321,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1173,
-            "endLine": 1216,
+            "line": 1168,
+            "endLine": 1211,
             "symbol": "PRS_LQR_RAMP",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1552,
-            "endLine": 1571,
+            "line": 1547,
+            "endLine": 1566,
             "symbol": "摆矩混合",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2328,18 +2357,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 860,
-            "endLine": 925,
+            "line": 855,
+            "endLine": 920,
             "symbol": "PRS_FLIP",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 587,
-            "endLine": 590,
+            "line": 582,
+            "endLine": 585,
             "symbol": "零力确认沿",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2365,18 +2394,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1217,
-            "endLine": 1284,
+            "line": 1212,
+            "endLine": 1279,
             "symbol": "PRS_DONE",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1331,
-            "endLine": 1337,
+            "line": 1326,
+            "endLine": 1332,
             "symbol": "触阶许可",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2402,18 +2431,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1176,
-            "endLine": 1285,
+            "line": 1171,
+            "endLine": 1280,
             "symbol": "恢复参考写回",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1517,
-            "endLine": 1624,
+            "line": 1512,
+            "endLine": 1619,
             "symbol": "下游使用阶段",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2436,18 +2465,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 179,
-            "endLine": 199,
+            "line": 180,
+            "endLine": 200,
             "symbol": "默认配置",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1299,
-            "endLine": 1330,
+            "line": 1294,
+            "endLine": 1325,
             "symbol": "运行中翻倒判定",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2504,10 +2533,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1331,
-            "endLine": 1351,
+            "line": 1326,
+            "endLine": 1346,
             "symbol": "开窗条件",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2561,10 +2590,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 447,
-            "endLine": 496,
+            "line": 442,
+            "endLine": 491,
             "symbol": "StepLegMotion_Update 后摆",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2590,10 +2619,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 474,
-            "endLine": 484,
+            "line": 469,
+            "endLine": 479,
             "symbol": "后摆对准后收短",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2618,10 +2647,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 485,
-            "endLine": 501,
+            "line": 480,
+            "endLine": 496,
             "symbol": "回摆与准备位复核",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2646,10 +2675,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 486,
-            "endLine": 494,
+            "line": 481,
+            "endLine": 489,
             "symbol": "每拍复核准备位",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2674,10 +2703,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1364,
-            "endLine": 1462,
+            "line": 1359,
+            "endLine": 1457,
             "symbol": "双侧接管与受阻位重算",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2702,10 +2731,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1464,
-            "endLine": 1486,
+            "line": 1459,
+            "endLine": 1481,
             "symbol": "动作侧参考覆盖",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -2950,18 +2979,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1517,
-            "endLine": 1551,
+            "line": 1620,
+            "endLine": 1661,
             "symbol": "PD 替换",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 普通模式前馈工作树"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1552,
-            "endLine": 1563,
-            "symbol": "S4 PD 保持分量",
-            "revision": "2026-11-21 合并工作区"
+            "line": 1662,
+            "endLine": 1681,
+            "symbol": "平衡接管保持分量",
+            "revision": "c2da24e + 普通模式前馈工作树"
           }
         ],
         "metadata": {
@@ -2984,10 +3013,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1517,
-            "endLine": 1571,
+            "line": 1512,
+            "endLine": 1566,
             "symbol": "纯 PD、混合和 LQR",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -3010,26 +3039,26 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 218,
-            "endLine": 245,
+            "line": 204,
+            "endLine": 231,
             "symbol": "LegVelEst",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 普通模式前馈工作树"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1572,
-            "endLine": 1596,
-            "symbol": "腿长力计算",
-            "revision": "2026-11-21 合并工作区"
+            "line": 1682,
+            "endLine": 1706,
+            "symbol": "长度刚度与实测速度阻尼",
+            "revision": "c2da24e + 普通模式前馈工作树"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis_jump.c",
-            "line": 618,
-            "symbol": "分相腿力",
-            "revision": "2026-11-21 合并工作区",
-            "endLine": 696
+            "line": 637,
+            "endLine": 715,
+            "symbol": "跳跃分相腿力",
+            "revision": "c2da24e + 普通模式前馈工作树"
           }
         ],
         "metadata": {
@@ -3052,10 +3081,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1597,
-            "endLine": 1650,
+            "line": 1592,
+            "endLine": 1645,
             "symbol": "重力前馈与差动横滚",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -3068,10 +3097,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1633,
+            "line": 1628,
             "symbol": "跳跃轴向力替换",
-            "revision": "2026-11-21 合并工作区",
-            "endLine": 1642
+            "revision": "c2da24e + 台架工作区",
+            "endLine": 1637
           }
         ],
         "metadata": {
@@ -3094,10 +3123,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1655,
-            "endLine": 1672,
+            "line": 1650,
+            "endLine": 1667,
             "symbol": "out_gate",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -3162,34 +3191,44 @@
         "sceneId": "output-path",
         "id": "joint-ff",
         "label": "关节摩擦前馈",
-        "description": "电机速度决定平滑摩擦方向。",
+        "description": "关节按规划速度分别计算动摩擦补偿，再与 VMC 输出求和。",
         "kind": "algorithm",
         "status": "implemented",
         "sourceRefs": [
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 54,
-            "endLine": 71,
-            "symbol": "摩擦系数",
-            "revision": "2026-11-21 合并工作区"
+            "line": 55,
+            "endLine": 67,
+            "symbol": "各电机的独立系数",
+            "revision": "c2da24e + 普通模式前馈工作树"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1687,
-            "endLine": 1717,
-            "symbol": "关节前馈",
-            "revision": "2026-11-21 合并工作区"
+            "line": 389,
+            "endLine": 421,
+            "symbol": "JointReferenceSpeed / ChaseReferenceSpeed",
+            "revision": "c2da24e + 普通模式前馈工作树"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 1797,
+            "endLine": 1823,
+            "symbol": "四关节前馈与下发",
+            "revision": "c2da24e + 普通模式前馈工作树"
           }
         ],
         "metadata": {
           "explanation": {
-            "receives": "VMC 力矩、关节速度、动作侧和全零闸。",
-            "process": "用 tanh 平滑并求和；按受阻/承载选系数，右侧后摆有单独试调值。",
-            "produces": "四个总关节参考。",
+            "receives": "VMC 电机轴力矩、两腿的长度参考及计划运动、全零输出闸。",
+            "process": "由本拍腿长计划增量和摆角计划速度计算两关节速度。左关节参考速度按电机轴取反。对各关节独立求全量 Tc × tanh(ωref/0.15)，加到 VMC 力矩后限幅。",
+            "produces": "四路有限的电机轴力矩参考及基础力矩、有效前馈和最终力矩。",
             "decisions": [
-              "S0 或未武装 S7 → 禁止加摩擦前馈。"
+              "上电判定或翻倒未武装 → 四关节输出为零。",
+              "计划速度为零 → 摩擦前馈为零。",
+              "基础力矩非有限 → 该路输出为零。"
             ]
           }
         }
@@ -3198,27 +3237,25 @@
         "sceneId": "output-path",
         "id": "joint-write",
         "label": "写 DM 力矩参考",
-        "description": "4 台 8009 使用 TORQUE 模式。",
+        "description": "4 台 DM8009 使用 TORQUE 模式。",
         "kind": "output",
         "status": "implemented",
         "sourceRefs": [
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1728,
-            "endLine": 1741,
+            "line": 1815,
+            "endLine": 1823,
             "symbol": "DMMotorSetCtrlMode / DMMotorSetRef",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 普通模式前馈工作树"
           }
         ],
         "metadata": {
           "explanation": {
-            "receives": "摩擦补偿后的电机轴力矩。",
-            "process": "检查有限性再写驱动引用，符号保持 VMC 输出约定。",
+            "receives": "门控、有限值检查和限幅后的电机轴力矩。",
+            "process": "按电机轴坐标写驱动引用。",
             "produces": "4 路 N·m。",
-            "decisions": [
-              "NaN 或 Inf → 该路写零。"
-            ]
+            "decisions": []
           }
         }
       },
@@ -3226,17 +3263,17 @@
         "sceneId": "output-path",
         "id": "wheel-limit",
         "label": "轮端门控、补偿与限幅",
-        "description": "车轮绕过 VMC，另做门控与限幅。",
+        "description": "按遥控前进和转向意图生成计划轮速，逐轮叠加摩擦前馈。",
         "kind": "decision",
         "status": "implemented",
         "sourceRefs": [
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1743,
-            "endLine": 1763,
-            "symbol": "轮门控与电流码换算",
-            "revision": "2026-11-21 合并工作区"
+            "line": 1826,
+            "endLine": 1851,
+            "symbol": "轮门控、计划速度与下发",
+            "revision": "c2da24e + 普通模式前馈工作树"
           },
           {
             "rootId": "firmware",
@@ -3244,16 +3281,17 @@
             "line": 26,
             "endLine": 35,
             "symbol": "轮力矩上限与换算",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 普通模式前馈工作树"
           }
         ],
         "metadata": {
           "explanation": {
-            "receives": "左右 Tw、轮缘速度、恢复状态与受阻位。",
-            "process": "有轮控权时叠加 tanh 摩擦并限制在 ±4.90 N·m。",
-            "produces": "左右轮最终目标。",
+            "receives": "左右 Tw、获准的前进与转向速度、恢复阶段与受阻轮位。",
+            "process": "左转时用 vx − 半轮距×wz 作为左轮参考，右轮取加号。平衡接管阶段沿已有比例加入参考。各轮按 Tc × tanh(vref/0.03) 求补偿并限制总矩在 ±4.90 N·m。",
+            "produces": "前进为正的左右最终轮矩、基础力矩和有效前馈。",
             "decisions": [
-              "S0–S3、S6、S7 或该侧受阻 → 轮力矩与轮摩擦都清零。"
+              "上电判定、伸腿至蹬地、快转、翻身或该侧受阻 → 对应轮矩为零。",
+              "无行驶计划 → 轮摩擦前馈为零。"
             ]
           }
         }
@@ -3269,10 +3307,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1754,
-            "endLine": 1763,
+            "line": 1841,
+            "endLine": 1851,
             "symbol": "DJIMotorSetRef",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 普通模式前馈工作树"
           },
           {
             "rootId": "firmware",
@@ -3280,17 +3318,15 @@
             "line": 26,
             "endLine": 35,
             "symbol": "WHEEL_T_PER_RAW",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 普通模式前馈工作树"
           }
         ],
         "metadata": {
           "explanation": {
-            "receives": "通过门控的左右轮矩。",
-            "process": "判断有限、乘比例并应用左轮方向符号。",
-            "produces": "两路原始电流参考。",
-            "decisions": [
-              "NaN 或 Inf → 该路写零。"
-            ]
+            "receives": "限幅后的左右轮矩，前进为正。",
+            "process": "乘换算比例，左轮按电机方向取反一次。",
+            "produces": "两路电流码参考。",
+            "decisions": []
           }
         }
       },
@@ -3298,7 +3334,7 @@
         "sceneId": "output-path",
         "id": "out-guide",
         "label": "反馈符号和坐标",
-        "description": "输入侧左关节和左轮速度/角度取负以统一左右。VMC 已经换回左腿电机坐标，写 DM 时只检查有限性。两轮另行在电流码处应用方向符号。",
+        "description": "左关节反馈取反进入机体运动学。VMC 的左关节力矩与摩擦前馈的左关节速度各自换回电机轴坐标，直接求和。两轮在前进坐标中叠加力矩，左轮在换算电流码时应用方向符号。",
         "kind": "annotation",
         "status": "implemented",
         "sourceRefs": [],
@@ -3345,10 +3381,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 305,
-            "endLine": 345,
-            "symbol": "CAN1 关节注册",
-            "revision": "2026-11-21 合并工作区"
+            "line": 306,
+            "endLine": 377,
+            "symbol": "ChassisActuatorsInit",
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -3385,6 +3421,14 @@
             "endLine": 21,
             "symbol": "MotorControlTask",
             "revision": "b64b9b5"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 306,
+            "endLine": 377,
+            "symbol": "ChassisActuatorsInit",
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -3553,10 +3597,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 309,
-            "endLine": 345,
+            "line": 308,
+            "endLine": 341,
             "symbol": "4 个关节实例",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -3587,10 +3631,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 348,
-            "endLine": 381,
+            "line": 343,
+            "endLine": 375,
             "symbol": "两轮 PowerControlInit",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -3714,17 +3758,17 @@
         "sceneId": "service-path",
         "id": "debug-vars",
         "label": "EP · 调试变量",
-        "description": "按符号查内部状态、单位和左右顺序。",
+        "description": "EP 观测单次试验和故障状态，并可写入台架请求字。",
         "kind": "algorithm",
         "status": "implemented",
         "sourceRefs": [
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 275,
-            "endLine": 303,
+            "line": 276,
+            "endLine": 304,
             "symbol": "ChassisDbgUpdate / ChassisDbgLqr",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -3763,10 +3807,10 @@
           {
             "rootId": "firmware",
             "path": "application/robot_def.h",
-            "line": 67,
-            "endLine": 70,
+            "line": 72,
+            "endLine": 75,
             "symbol": "VISION_USE_VCP",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -3807,10 +3851,10 @@
           {
             "rootId": "firmware",
             "path": "application/robot_task.h",
-            "line": 102,
-            "endLine": 122,
+            "line": 112,
+            "endLine": 132,
             "symbol": "StartDAEMONTASK",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -3865,10 +3909,10 @@
           {
             "rootId": "firmware",
             "path": "application/robot_task.h",
-            "line": 73,
-            "endLine": 148,
+            "line": 83,
+            "endLine": 158,
             "symbol": "任务耗时日志",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -3899,18 +3943,18 @@
           {
             "rootId": "firmware",
             "path": "application/robot_task.h",
-            "line": 150,
-            "endLine": 163,
+            "line": 160,
+            "endLine": 177,
             "symbol": "StartUITASK",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
             "path": "application/robot.c",
             "line": 22,
-            "endLine": 48,
+            "endLine": 53,
             "symbol": "RobotInit",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -3934,9 +3978,9 @@
             "rootId": "firmware",
             "path": "application/robot.c",
             "line": 22,
-            "endLine": 70,
+            "endLine": 75,
             "symbol": "应用初始化与任务调用",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -3949,10 +3993,10 @@
           {
             "rootId": "firmware",
             "path": "CMakeLists.txt",
-            "line": 71,
-            "endLine": 78,
+            "line": 76,
+            "endLine": 83,
             "symbol": "编译源码扫描",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -4023,7 +4067,7 @@
         "sceneId": "build-path",
         "id": "ps-build",
         "label": "可移植构建入口",
-        "description": "scripts/project.ps1 -Action build。",
+        "description": "默认生成普通固件。-BenchDebug 使用 build/bench-debug 独立产物目录。",
         "kind": "algorithm",
         "status": "implemented",
         "sourceRefs": [
@@ -4038,10 +4082,10 @@
           {
             "rootId": "firmware",
             "path": "scripts/project.ps1",
-            "line": 122,
-            "endLine": 147,
+            "line": 125,
+            "endLine": 150,
             "symbol": "Configure-Project / Build-Project",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -4057,17 +4101,17 @@
         "sceneId": "build-path",
         "id": "cmake-build",
         "label": "STM32 构建与链接",
-        "description": "驱动、CubeMX、RTOS、BSP、Module 和 App。",
+        "description": "WHEELLEG_DEBUG_MODE 选择应用；台架版链接 wheelleg_debug_mode 静态库。",
         "kind": "algorithm",
         "status": "implemented",
         "sourceRefs": [
           {
             "rootId": "firmware",
             "path": "CMakeLists.txt",
-            "line": 64,
-            "endLine": 111,
+            "line": 69,
+            "endLine": 125,
             "symbol": "源码范围与产物",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           }
         ],
         "metadata": {
@@ -4083,17 +4127,17 @@
         "sceneId": "build-path",
         "id": "image",
         "label": "构建产物与调试资料",
-        "description": "ELF 提供调试符号，HEX/BIN 用于下载。",
+        "description": "烧录所选固件的 HEX，EP 使用对应构建目录同批的 ELF。",
         "kind": "algorithm",
         "status": "implemented",
         "sourceRefs": [
           {
             "rootId": "firmware",
             "path": "CMakeLists.txt",
-            "line": 99,
-            "endLine": 111,
+            "line": 106,
+            "endLine": 125,
             "symbol": "ELF / HEX / BIN",
-            "revision": "b64b9b5"
+            "revision": "c2da24e + 台架工作区"
           },
           {
             "rootId": "firmware",
@@ -4287,10 +4331,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1412,
+            "line": 1407,
             "symbol": "ChassisTask 跳跃接入",
-            "revision": "2026-11-21 合并工作区",
-            "endLine": 1446
+            "revision": "c2da24e + 台架工作区",
+            "endLine": 1441
           },
           {
             "rootId": "firmware",
@@ -4320,6 +4364,147 @@
               "收腿到位且离地状态解除，或触地行程受阻与超时 → 进入落地阶段。",
               "落地缓冲结束并稳定，或总超时 → 重锚并回归 S5 腿长。",
               "蹲伏期间掉线 → 取消蹬伸并回位。零力急停清跳跃状态。"
+            ]
+          }
+        }
+      },
+      "bench-friction": {
+        "sceneId": "root",
+        "id": "bench-friction",
+        "label": "台架 · 摩擦测定",
+        "description": "上电零力待试。EP 支持持续力矩测定、大腿保持、双侧虚拟腿归零、主动撤力和故障复位。",
+        "kind": "algorithm",
+        "status": "implemented",
+        "sourceRefs": [
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/debug_mode.c",
+            "line": 11,
+            "endLine": 21,
+            "symbol": "DebugModeInit / DebugModeTask",
+            "revision": "c2da24e + EP 复位台架工作区"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/friction_test.c",
+            "line": 274,
+            "endLine": 311,
+            "symbol": "EndTrial",
+            "revision": "c2da24e + 台架计划速度前馈"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/friction_test.c",
+            "line": 327,
+            "endLine": 335,
+            "symbol": "RecordMotion",
+            "revision": "c2da24e + 台架计划速度前馈"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/friction_test.c",
+            "line": 337,
+            "endLine": 366,
+            "symbol": "TryStartRequest",
+            "revision": "c2da24e + 台架计划速度前馈"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/friction_test.c",
+            "line": 442,
+            "endLine": 579,
+            "symbol": "StartPrep / PrepUpdate",
+            "revision": "c2da24e + 台架计划速度前馈"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/friction_test.c",
+            "line": 994,
+            "endLine": 1189,
+            "symbol": "HandleFault / UpdateOutput",
+            "revision": "c2da24e + 台架计划速度前馈"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/friction_test.c",
+            "line": 1226,
+            "endLine": 1295,
+            "symbol": "ObserveLegAngles / FrictionTestUpdate",
+            "revision": "c2da24e + 台架计划速度前馈"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/friction_test.h",
+            "line": 18,
+            "endLine": 198,
+            "symbol": "FrictionDebug_s / friction_ep_request_v2 / friction_ep_request_v3",
+            "revision": "c2da24e + 台架计划速度前馈"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/friction_test.c",
+            "line": 583,
+            "endLine": 641,
+            "symbol": "CaptureThighsHold / UpdateThighsHold",
+            "revision": "c2da24e + 台架计划速度前馈"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/friction_test.c",
+            "line": 368,
+            "endLine": 420,
+            "symbol": "StartPulse / StartCalfPulse / CapturePulseSample",
+            "revision": "c2da24e + 台架计划速度前馈"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/friction_test.c",
+            "line": 691,
+            "endLine": 738,
+            "symbol": "StartCalfPose",
+            "revision": "c2da24e + 台架计划速度前馈"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/friction_test.c",
+            "line": 903,
+            "endLine": 992,
+            "symbol": "UpdateCalfPose",
+            "revision": "c2da24e + 台架计划速度前馈"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/friction_test.c",
+            "line": 643,
+            "endLine": 689,
+            "symbol": "StartVirtualReference / StartVirtualZero",
+            "revision": "c2da24e + 台架计划速度前馈"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/debug_mode/friction_test.c",
+            "line": 740,
+            "endLine": 901,
+            "symbol": "EndVirtualZero / VirtualLegCommand / UpdateVirtualZero",
+            "revision": "c2da24e + 台架计划速度前馈"
+          }
+        ],
+        "metadata": {
+          "explanation": {
+            "receives": "EP V2/V3 请求字、执行器反馈和周期节拍。两路请求共用序号。",
+            "process": "测定持续按请求力矩出力并记录位移、速度和时长。单侧预定位只驱动选中的大腿。双侧归零先以五次轨迹控制腿长至 0.30 m，再回摆到 0°。四路按原始坐标的计划速度计算摩擦前馈，按实测速度给阻尼。双侧原位保持分别捕获两台大腿的角度。 双侧小腿测定前可自动摆位。",
+            "produces": "试验力矩或电流码、试验摘要、虚拟腿长与摆角，以及大腿保持目标和两路力矩。 小腿 5 ms 轨迹，含角度、速度、力矩反馈及同侧大腿角。 右轮出力与滑行的板载角度、速度和电流折算力矩。 双侧归零的四路计划速度、摩擦前馈及捕获角度。",
+            "decisions": [
+              "初始化完成 → 零力待试，启动当拍请求不重放。",
+              "两路同拍有新请求 → 消费更新的序号，相同序号优先 V3。",
+              "试验期间收到 V3 0xD004 → 当前出力与保持一起撤力。反馈失效 → 撤力并锁存，反馈恢复后可复位。",
+              "单侧归零到位 → 撤力。单侧后摆角到位 → 继续保持。V3 0xD005 → 捕获并保持两侧当前大腿角，小腿为零力。",
+              "大腿保持时 → 可按侧发起小腿力矩测定。",
+              "台架力矩请求受 V2/V3 编码和驱动范围约束。",
+              "V3 0xD006 / 0xD007 → 自动摆位，大腿摩擦前馈分别关闭 / 开启。参考走完且两侧大腿角在 0.025 rad 内稳定 300 ms → 捕获实际角，两侧小腿归零。",
+              "双侧大腿保持时提交 V3 以 0xF 开头的负载字 → 对选中小腿出力。600 ms 小腿试验结束，选中小腿归零，双侧大腿继续保持。",
+              "V3 0xB 开头的右轮请求 → 可从零力待试直接测右轮，出力 600 ms 后撤力，继续采集 400 ms 滑行。两阶段每 5 ms 记录一帧。",
+              "双侧归零参考走完，且四个电机角持续 500 ms 各变化不超过 0.01 rad → 收腿阶段进入回摆。回摆阶段捕获实际电机角，保留支撑力矩并持续保持。"
             ]
           }
         }
@@ -4428,7 +4613,7 @@
         "coordinateFrame": "电机轴",
         "order": 0,
         "description": "",
-        "multiplicity": "one"
+        "multiplicity": "many"
       },
       "control_o_wref": {
         "id": "control_o_wref",
@@ -4454,7 +4639,7 @@
         "coordinateFrame": "电机轴",
         "order": 1,
         "description": "",
-        "multiplicity": "one"
+        "multiplicity": "many"
       },
       "control_o_enable": {
         "id": "control_o_enable",
@@ -4480,7 +4665,7 @@
         "coordinateFrame": "",
         "order": 2,
         "description": "DMMotor/DJIMotor 的 Stop/Enable 边沿，驱动任务按 stop_flag 清零。",
-        "multiplicity": "one"
+        "multiplicity": "many"
       },
       "drive_o_joint": {
         "id": "drive_o_joint",
@@ -4662,7 +4847,7 @@
         "coordinateFrame": "",
         "order": 0,
         "description": "chassis_dbg、grf_dbg、step_collision_dbg、step_leg_motion 等。",
-        "multiplicity": "one"
+        "multiplicity": "many"
       },
       "services_i_att": {
         "id": "services_i_att",
@@ -5691,20 +5876,20 @@
         "shape": "",
         "coordinateFrame": "",
         "order": 0,
-        "description": "图内合称。十维状态、左右实测腿长、机体系腿姿态、β、轮速与惯导。",
+        "description": "VMC 从控制观测包读取左右腿几何。",
         "multiplicity": "one"
       },
       "out_i_joint": {
         "id": "out_i_joint",
         "nodeId": "out",
         "direction": "input",
-        "label": "关节反馈",
-        "dataType": "DM反馈",
+        "label": "摩擦前馈运动参考",
+        "dataType": "运动参考",
         "unit": "",
-        "shape": "4",
+        "shape": "",
         "coordinateFrame": "",
         "order": 1,
-        "description": "每台 DM8009 的多圈位置、速度和测量力矩。",
+        "description": "两腿有效长度、每拍计划长度增量和摆速，以及获准的前进速度和转向速度。",
         "multiplicity": "one"
       },
       "policy_o_target": {
@@ -6081,7 +6266,7 @@
         "shape": "",
         "coordinateFrame": "",
         "order": 2,
-        "description": "",
+        "description": "各路计划速度、基础力矩、限幅后有效摩擦前馈和最终力矩。",
         "multiplicity": "many"
       },
       "trace_i_debugOut": {
@@ -9724,13 +9909,13 @@
         "id": "joint-ff_i_joint",
         "nodeId": "joint-ff",
         "direction": "input",
-        "label": "关节反馈",
-        "dataType": "DM反馈",
+        "label": "摩擦前馈运动参考",
+        "dataType": "运动参考",
         "unit": "",
-        "shape": "4",
+        "shape": "",
         "coordinateFrame": "",
         "order": 1,
-        "description": "每台 DM8009 的多圈位置、速度和测量力矩。",
+        "description": "两腿有效长度、每拍计划长度增量和摆速，以及获准的前进速度和转向速度。",
         "multiplicity": "one"
       },
       "joint-ff_i_gate": {
@@ -9743,19 +9928,6 @@
         "shape": "",
         "coordinateFrame": "",
         "order": 2,
-        "description": "",
-        "multiplicity": "one"
-      },
-      "joint-ff_i_safety": {
-        "id": "joint-ff_i_safety",
-        "nodeId": "joint-ff",
-        "direction": "input",
-        "label": "模式闸与动作相位",
-        "dataType": "输出门控",
-        "unit": "",
-        "shape": "",
-        "coordinateFrame": "",
-        "order": 3,
         "description": "",
         "multiplicity": "one"
       },
@@ -9815,13 +9987,13 @@
         "id": "wheel-limit_i_ctrlView",
         "nodeId": "wheel-limit",
         "direction": "input",
-        "label": "控制观测",
-        "dataType": "底盘观测包",
+        "label": "摩擦前馈运动参考",
+        "dataType": "运动参考",
         "unit": "",
         "shape": "",
         "coordinateFrame": "",
         "order": 1,
-        "description": "图内合称。十维状态、左右实测腿长、机体系腿姿态、β、轮速与惯导。",
+        "description": "两腿有效长度、每拍计划长度增量和摆速，以及获准的前进速度和转向速度。",
         "multiplicity": "one"
       },
       "wheel-limit_i_safety": {
@@ -9841,11 +10013,11 @@
         "id": "wheel-limit_o_twMode",
         "nodeId": "wheel-limit",
         "direction": "output",
-        "label": "模式仲裁后 Tw",
+        "label": "最终轮矩",
         "dataType": "f32",
         "unit": "N·m",
         "shape": "2",
-        "coordinateFrame": "",
+        "coordinateFrame": "前进为正",
         "order": 0,
         "description": "",
         "multiplicity": "many"
@@ -9854,11 +10026,11 @@
         "id": "wheel-write_i_twMode",
         "nodeId": "wheel-write",
         "direction": "input",
-        "label": "模式仲裁后 Tw",
+        "label": "最终轮矩",
         "dataType": "f32",
         "unit": "N·m",
         "shape": "2",
-        "coordinateFrame": "",
+        "coordinateFrame": "前进为正",
         "order": 0,
         "description": "",
         "multiplicity": "one"
@@ -9920,10 +10092,10 @@
         "id": "binding_out_i_joint",
         "nodeId": "boundary_input_output-path",
         "direction": "output",
-        "label": "关节反馈",
-        "dataType": "DM反馈",
+        "label": "摩擦前馈运动参考",
+        "dataType": "运动参考",
         "unit": "",
-        "shape": "4",
+        "shape": "",
         "coordinateFrame": "",
         "order": 1,
         "description": "每台 DM8009 的多圈位置、速度和测量力矩。",
@@ -10991,7 +11163,7 @@
         "shape": "",
         "coordinateFrame": "",
         "order": 8,
-        "description": "跳跃阶段使能、腿长参考及反馈配置。",
+        "description": "跳跃阶段使能、参考腿长、每拍计划增量及反馈配置。",
         "multiplicity": "many"
       },
       "lqr_i_jump": {
@@ -11100,6 +11272,177 @@
         "description": "",
         "multiplicity": "many",
         "parentPortId": "compose_i_jump"
+      },
+      "bench_i_joint": {
+        "id": "bench_i_joint",
+        "nodeId": "bench-friction",
+        "direction": "input",
+        "label": "关节反馈",
+        "dataType": "DM反馈",
+        "unit": "",
+        "shape": "4",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "每台 DM8009 的多圈位置、速度和测量力矩。",
+        "multiplicity": "one"
+      },
+      "bench_i_wheel": {
+        "id": "bench_i_wheel",
+        "nodeId": "bench-friction",
+        "direction": "input",
+        "label": "轮端反馈",
+        "dataType": "DJI反馈",
+        "unit": "",
+        "shape": "2",
+        "coordinateFrame": "",
+        "order": 1,
+        "description": "累计转子角、转子角速度、电流等。",
+        "multiplicity": "one"
+      },
+      "bench_o_jref": {
+        "id": "bench_o_jref",
+        "nodeId": "bench-friction",
+        "direction": "output",
+        "label": "关节力矩参考",
+        "dataType": "f32",
+        "unit": "N·m",
+        "shape": "4",
+        "coordinateFrame": "电机轴",
+        "order": 2,
+        "description": "被测关节原始试验力矩，可选同侧另一关节限力保持；退出时两路归零。",
+        "multiplicity": "many"
+      },
+      "bench_o_wref": {
+        "id": "bench_o_wref",
+        "nodeId": "bench-friction",
+        "direction": "output",
+        "label": "C620 电流码",
+        "dataType": "f32",
+        "unit": "raw",
+        "shape": "2",
+        "coordinateFrame": "电机轴",
+        "order": 3,
+        "description": "",
+        "multiplicity": "many"
+      },
+      "bench_o_enable": {
+        "id": "bench_o_enable",
+        "nodeId": "bench-friction",
+        "direction": "output",
+        "label": "驱动停机/恢复",
+        "dataType": "控制边沿",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 4,
+        "description": "DMMotor/DJIMotor 的 Stop/Enable 边沿，驱动任务按 stop_flag 清零。",
+        "multiplicity": "many"
+      },
+      "bench_o_debug": {
+        "id": "bench_o_debug",
+        "nodeId": "bench-friction",
+        "direction": "output",
+        "label": "运行观测变量",
+        "dataType": "调试快照",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 5,
+        "description": "请求回执、实测腿长和摆角、归零到位角、四关节力矩及试验摘要。",
+        "multiplicity": "many"
+      },
+      "services_o_ep_trial": {
+        "label": "EP 台架试验字",
+        "dataType": "u32",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "description": "高 16 位为共用序号，低 16 位编码试验力矩、归零、撤力及故障复位。V2 为 2 mN·m/码，V3 为 4 mN·m/码。 V3 还支持单侧大腿目标角与保持撤力。目标角每码 4 mrad。 V3 0xD005 捕获双侧当前大腿角。 V3 0xD004 结束当前动作与保持。 V3 支持小腿自动摆位及 600 ms 试验。 V3 0xB 高半字节为右轮定时脉冲，低 12 位每码 1 mN·m。",
+        "id": "services_o_ep_trial",
+        "nodeId": "services",
+        "direction": "output",
+        "order": 4,
+        "multiplicity": "many"
+      },
+      "bench_i_ep_trial": {
+        "label": "EP 台架试验字",
+        "dataType": "u32",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "description": "高 16 位为共用序号，低 16 位编码试验力矩、归零、撤力及故障复位。V2 为 2 mN·m/码，V3 为 4 mN·m/码。 V3 还支持单侧大腿目标角与保持撤力。目标角每码 4 mrad。 V3 0xD005 捕获双侧当前大腿角。 V3 0xD004 结束当前动作与保持。 V3 支持小腿自动摆位及 600 ms 试验。 V3 0xB 高半字节为右轮定时脉冲，低 12 位每码 1 mN·m。",
+        "id": "bench_i_ep_trial",
+        "nodeId": "bench-friction",
+        "direction": "input",
+        "order": 2,
+        "multiplicity": "one"
+      },
+      "binding_services_o_ep_trial": {
+        "id": "binding_services_o_ep_trial",
+        "nodeId": "boundary_output_service-path",
+        "direction": "input",
+        "label": "EP 台架试验字",
+        "dataType": "u32",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one",
+        "parentPortId": "services_o_ep_trial"
+      },
+      "debug_vars_o_trial": {
+        "id": "debug_vars_o_trial",
+        "nodeId": "debug-vars",
+        "direction": "output",
+        "label": "EP 台架试验字",
+        "dataType": "u32",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 2,
+        "description": "高 16 位为共用序号，低 16 位编码试验力矩、归零、撤力及故障复位。V2 为 2 mN·m/码，V3 为 4 mN·m/码。 V3 还支持单侧大腿目标角与保持撤力。目标角每码 4 mrad。 V3 0xD005 捕获双侧当前大腿角。 V3 0xD004 结束当前动作与保持。 V3 支持小腿自动摆位及 600 ms 试验。 V3 0xB 高半字节为右轮定时脉冲，低 12 位每码 1 mN·m。",
+        "multiplicity": "many"
+      },
+      "policy_o_friction": {
+        "label": "摩擦前馈运动参考",
+        "dataType": "运动参考",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "description": "两腿有效长度、每拍计划长度增量和摆速，以及获准的前进速度和转向速度。",
+        "id": "policy_o_friction",
+        "nodeId": "policy",
+        "direction": "output",
+        "order": 9,
+        "multiplicity": "many"
+      },
+      "commit-refs_o_friction": {
+        "label": "摩擦前馈运动参考",
+        "dataType": "运动参考",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "description": "两腿有效长度、每拍计划长度增量和摆速，以及获准的前进速度和转向速度。",
+        "id": "commit-refs_o_friction",
+        "nodeId": "commit-refs",
+        "direction": "output",
+        "order": 9,
+        "multiplicity": "many"
+      },
+      "binding_policy_o_friction": {
+        "id": "binding_policy_o_friction",
+        "nodeId": "boundary_output_policy-path",
+        "direction": "input",
+        "label": "摩擦前馈运动参考",
+        "dataType": "运动参考",
+        "unit": "",
+        "shape": "",
+        "coordinateFrame": "",
+        "order": 0,
+        "description": "",
+        "multiplicity": "one",
+        "parentPortId": "policy_o_friction"
       }
     },
     "edges": {
@@ -11109,7 +11452,7 @@
         "targetPortId": "mail_i_cmd",
         "label": "底盘命令",
         "kind": "data",
-        "condition": "",
+        "condition": "WHEELLEG_DEBUG_MODE=0",
         "description": "vx、wz、模式、腿长挡位和开窗序号。"
       },
       "edge_002": {
@@ -11118,7 +11461,7 @@
         "targetPortId": "control_i_cmd",
         "label": "底盘命令",
         "kind": "data",
-        "condition": "",
+        "condition": "WHEELLEG_DEBUG_MODE=0",
         "description": "vx、wz、模式、腿长挡位和开窗序号。"
       },
       "edge_003": {
@@ -11127,7 +11470,7 @@
         "targetPortId": "control_i_att",
         "label": "惯导姿态",
         "kind": "data",
-        "condition": "",
+        "condition": "WHEELLEG_DEBUG_MODE=0",
         "description": "Pitch/Roll/Yaw、Gyro 和加速度，跨任务共享 INS 结构体。"
       },
       "edge_004": {
@@ -11136,7 +11479,7 @@
         "targetPortId": "drive_i_jref",
         "label": "关节力矩参考",
         "kind": "force",
-        "condition": "",
+        "condition": "WHEELLEG_DEBUG_MODE=0",
         "description": ""
       },
       "edge_005": {
@@ -11145,7 +11488,7 @@
         "targetPortId": "drive_i_wref",
         "label": "C620 电流码",
         "kind": "control",
-        "condition": "",
+        "condition": "WHEELLEG_DEBUG_MODE=0",
         "description": ""
       },
       "edge_006": {
@@ -11154,7 +11497,7 @@
         "targetPortId": "drive_i_enable",
         "label": "驱动停机/恢复",
         "kind": "control",
-        "condition": "",
+        "condition": "WHEELLEG_DEBUG_MODE=0",
         "description": ""
       },
       "edge_007": {
@@ -11163,7 +11506,7 @@
         "targetPortId": "control_i_joint",
         "label": "4 关节反馈",
         "kind": "data",
-        "condition": "",
+        "condition": "WHEELLEG_DEBUG_MODE=0",
         "description": "每台 DM8009 的多圈位置、速度和测量力矩。"
       },
       "edge_008": {
@@ -11172,7 +11515,7 @@
         "targetPortId": "control_i_wheel",
         "label": "2 轮反馈",
         "kind": "data",
-        "condition": "",
+        "condition": "WHEELLEG_DEBUG_MODE=0",
         "description": "累计转子角、转子角速度、电流等。"
       },
       "edge_009": {
@@ -11217,7 +11560,7 @@
         "targetPortId": "services_i_debug",
         "label": "运行观测变量",
         "kind": "data",
-        "condition": "",
+        "condition": "WHEELLEG_DEBUG_MODE=0",
         "description": "chassis_dbg、grf_dbg、step_collision_dbg、step_leg_motion 等。"
       },
       "edge_014": {
@@ -11226,7 +11569,7 @@
         "targetPortId": "services_i_att",
         "label": "惯导姿态",
         "kind": "data",
-        "condition": "",
+        "condition": "WHEELLEG_DEBUG_MODE=0",
         "description": "Pitch/Roll/Yaw、Gyro 和加速度，跨任务共享 INS 结构体。"
       },
       "edge_015": {
@@ -11343,7 +11686,7 @@
         "targetPortId": "tsk-cmd_i_cmdTask",
         "label": "命令任务",
         "kind": "control",
-        "condition": "",
+        "condition": "WHEELLEG_DEBUG_MODE=0",
         "description": ""
       },
       "edge_028": {
@@ -11361,7 +11704,7 @@
         "targetPortId": "tsk-ins_i_insTask",
         "label": "惯导任务",
         "kind": "control",
-        "condition": "",
+        "condition": "WHEELLEG_DEBUG_MODE=0",
         "description": ""
       },
       "edge_030": {
@@ -11397,7 +11740,7 @@
         "targetPortId": "tsk-ui_i_uiTask",
         "label": "UI 任务",
         "kind": "control",
-        "condition": "",
+        "condition": "WHEELLEG_DEBUG_MODE=0",
         "description": ""
       },
       "edge_034": {
@@ -11611,19 +11954,19 @@
         "id": "edge_057",
         "sourcePortId": "observe_o_ctrlView",
         "targetPortId": "out_i_ctrlView",
-        "label": "β 与轮速",
+        "label": "左右腿几何",
         "kind": "data",
         "condition": "",
-        "description": "图内合称。十维状态、左右实测腿长、机体系腿姿态、β、轮速与惯导。"
+        "description": "VMC 使用左右腿的 β。"
       },
       "edge_058": {
         "id": "edge_058",
-        "sourcePortId": "binding_control_i_joint",
+        "sourcePortId": "policy_o_friction",
         "targetPortId": "out_i_joint",
-        "label": "关节速度",
+        "label": "摩擦前馈运动参考",
         "kind": "data",
         "condition": "",
-        "description": "每台 DM8009 的多圈位置、速度和测量力矩。"
+        "description": "两腿有效长度、每拍计划长度增量和摆速，以及获准的前进速度和转向速度。"
       },
       "edge_059": {
         "id": "edge_059",
@@ -13096,25 +13439,16 @@
         "id": "edge_222",
         "sourcePortId": "binding_out_i_joint",
         "targetPortId": "joint-ff_i_joint",
-        "label": "关节速度",
+        "label": "摩擦前馈运动参考",
         "kind": "data",
         "condition": "",
-        "description": "每台 DM8009 的多圈位置、速度和测量力矩。"
+        "description": "采用每侧有效腿长、计划长度步长和摆角速度。"
       },
       "edge_223": {
         "id": "edge_223",
         "sourcePortId": "binding_out_i_gate",
         "targetPortId": "joint-ff_i_gate",
         "label": "全零输出闸",
-        "kind": "control",
-        "condition": "",
-        "description": ""
-      },
-      "edge_224": {
-        "id": "edge_224",
-        "sourcePortId": "binding_out_i_safety",
-        "targetPortId": "joint-ff_i_safety",
-        "label": "模式闸与动作相位",
         "kind": "control",
         "condition": "",
         "description": ""
@@ -13148,12 +13482,12 @@
       },
       "edge_228": {
         "id": "edge_228",
-        "sourcePortId": "binding_out_i_ctrlView",
+        "sourcePortId": "binding_out_i_joint",
         "targetPortId": "wheel-limit_i_ctrlView",
-        "label": "轮速",
+        "label": "摩擦前馈运动参考",
         "kind": "data",
         "condition": "",
-        "description": "图内合称。十维状态、左右实测腿长、机体系腿姿态、β、轮速与惯导。"
+        "description": "采用通过模式和悬空门控的前进与转向命令。"
       },
       "edge_229": {
         "id": "edge_229",
@@ -13168,7 +13502,7 @@
         "id": "edge_230",
         "sourcePortId": "wheel-limit_o_twMode",
         "targetPortId": "wheel-write_i_twMode",
-        "label": "模式仲裁后 Tw",
+        "label": "最终轮矩",
         "kind": "force",
         "condition": "",
         "description": ""
@@ -13658,6 +13992,87 @@
         "kind": "data",
         "condition": "",
         "description": ""
+      },
+      "edge_bench_0": {
+        "id": "edge_bench_0",
+        "sourcePortId": "drive_o_joint",
+        "targetPortId": "bench_i_joint",
+        "label": "关节反馈",
+        "kind": "data",
+        "condition": "WHEELLEG_DEBUG_MODE=1",
+        "description": "固件构建时选定此路径。"
+      },
+      "edge_bench_1": {
+        "id": "edge_bench_1",
+        "sourcePortId": "drive_o_wheel",
+        "targetPortId": "bench_i_wheel",
+        "label": "轮端反馈",
+        "kind": "data",
+        "condition": "WHEELLEG_DEBUG_MODE=1",
+        "description": "固件构建时选定此路径。"
+      },
+      "edge_bench_2": {
+        "id": "edge_bench_2",
+        "sourcePortId": "bench_o_jref",
+        "targetPortId": "drive_i_jref",
+        "label": "关节力矩参考",
+        "kind": "force",
+        "condition": "WHEELLEG_DEBUG_MODE=1",
+        "description": "固件构建时选定此路径。"
+      },
+      "edge_bench_3": {
+        "id": "edge_bench_3",
+        "sourcePortId": "bench_o_wref",
+        "targetPortId": "drive_i_wref",
+        "label": "C620 电流码",
+        "kind": "control",
+        "condition": "WHEELLEG_DEBUG_MODE=1",
+        "description": "固件构建时选定此路径。"
+      },
+      "edge_bench_4": {
+        "id": "edge_bench_4",
+        "sourcePortId": "bench_o_enable",
+        "targetPortId": "drive_i_enable",
+        "label": "驱动停机/恢复",
+        "kind": "control",
+        "condition": "WHEELLEG_DEBUG_MODE=1",
+        "description": "固件构建时选定此路径。"
+      },
+      "edge_bench_5": {
+        "id": "edge_bench_5",
+        "sourcePortId": "bench_o_debug",
+        "targetPortId": "services_i_debug",
+        "label": "运行观测变量",
+        "kind": "data",
+        "condition": "WHEELLEG_DEBUG_MODE=1",
+        "description": "固件构建时选定此路径。"
+      },
+      "edge_ep_bench_request": {
+        "id": "edge_ep_bench_request",
+        "sourcePortId": "services_o_ep_trial",
+        "targetPortId": "bench_i_ep_trial",
+        "label": "EP 单次请求",
+        "kind": "control",
+        "condition": "WHEELLEG_DEBUG_MODE=1",
+        "description": "待试时接受新力矩或单侧大腿归零；故障反馈有效且停稳时接受零力复位。"
+      },
+      "edge_ep_service_trial": {
+        "id": "edge_ep_service_trial",
+        "sourcePortId": "debug_vars_o_trial",
+        "targetPortId": "binding_services_o_ep_trial",
+        "label": "EP 单次请求",
+        "kind": "control",
+        "condition": "WHEELLEG_DEBUG_MODE=1",
+        "description": "V2 请求字提交单次试验、单侧大腿归零或故障复位。"
+      },
+      "edge_policy_friction_plan": {
+        "id": "edge_policy_friction_plan",
+        "sourcePortId": "commit-refs_o_friction",
+        "targetPortId": "binding_policy_o_friction",
+        "label": "摩擦前馈运动参考",
+        "kind": "data",
+        "condition": "",
+        "description": "两腿有效长度、每拍计划长度增量和摆速，以及获准的前进速度和转向速度。"
       }
     },
     "groups": {},
@@ -15708,6 +16123,13 @@
           "y": 1120
         },
         "width": 302
+      },
+      "bench-friction": {
+        "position": {
+          "x": 710,
+          "y": 1182
+        },
+        "width": 278
       }
     },
     "edges": {
@@ -19551,19 +19973,6 @@
           {
             "x": 634,
             "y": 423
-          }
-        ]
-      },
-      "edge_224": {
-        "style": "straight",
-        "waypoints": [
-          {
-            "x": 616,
-            "y": 617
-          },
-          {
-            "x": 616,
-            "y": 455
           }
         ]
       },

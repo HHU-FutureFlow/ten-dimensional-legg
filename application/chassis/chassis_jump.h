@@ -19,6 +19,7 @@ typedef struct
 typedef struct
 {
     float length_target;
+    float length_step; /* 1 ms 内主动规划的腿长增量，m */
     float wheel_theta_scale;
     float hip_pitch_scale;
     uint8_t active;

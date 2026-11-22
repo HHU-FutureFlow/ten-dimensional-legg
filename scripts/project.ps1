@@ -3,13 +3,16 @@ param(
     [ValidateSet("configure", "build", "clean", "download-dap", "download-stlink", "download-jlink")]
     [string]$Action = "build",
     [ValidateSet("Debug", "Release", "RelWithDebInfo", "MinSizeRel")]
-    [string]$BuildType = "Debug"
+    [string]$BuildType = "Debug",
+    [switch]$BenchDebug
 )
 
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$BuildDirectory = Join-Path $ProjectRoot "build"
+$BuildSubdirectory = if ($BenchDebug) { "build/bench-debug" } else { "build" }
+$BuildDirectory = Join-Path $ProjectRoot $BuildSubdirectory
+$BenchMode = if ($BenchDebug) { "ON" } else { "OFF" }
 $TargetName = "basic_framework"
 
 function Find-Executable {
@@ -104,7 +107,7 @@ function Reset-StaleCMakeCache {
 
     Write-Host "Project path or generator changed; clearing stale CMake cache."
     $resolvedBuild = [IO.Path]::GetFullPath($BuildDirectory).TrimEnd("\")
-    $expectedBuild = [IO.Path]::GetFullPath((Join-Path $ProjectRoot "build")).TrimEnd("\")
+    $expectedBuild = [IO.Path]::GetFullPath((Join-Path $ProjectRoot $BuildSubdirectory)).TrimEnd("\")
     if ($resolvedBuild -ne $expectedBuild -or -not $resolvedBuild.StartsWith([IO.Path]::GetFullPath($ProjectRoot), [StringComparison]::OrdinalIgnoreCase)) {
         throw "Refusing to clean a build directory outside the project: $resolvedBuild"
     }
@@ -132,7 +135,7 @@ function Configure-Project {
     New-Item -ItemType Directory -Path $BuildDirectory -Force | Out-Null
     Reset-StaleCMakeCache
 
-    & $cmake -S $ProjectRoot -B $BuildDirectory -G Ninja "-DCMAKE_BUILD_TYPE=$BuildType" "-DCMAKE_MAKE_PROGRAM=$ninja"
+    & $cmake -S $ProjectRoot -B $BuildDirectory -G Ninja "-DCMAKE_BUILD_TYPE=$BuildType" "-DCMAKE_MAKE_PROGRAM=$ninja" "-DWHEELLEG_DEBUG_MODE=$BenchMode"
     if ($LASTEXITCODE -ne 0) {
         throw "CMake configure failed with exit code: $LASTEXITCODE"
     }
@@ -153,7 +156,7 @@ function Clean-Project {
     }
 
     $resolvedBuild = [IO.Path]::GetFullPath($BuildDirectory).TrimEnd("\")
-    $expectedBuild = [IO.Path]::GetFullPath((Join-Path $ProjectRoot "build")).TrimEnd("\")
+    $expectedBuild = [IO.Path]::GetFullPath((Join-Path $ProjectRoot $BuildSubdirectory)).TrimEnd("\")
     if ($resolvedBuild -ne $expectedBuild) {
         throw "Refusing to delete a build directory outside the project: $resolvedBuild"
     }
@@ -179,7 +182,7 @@ function Download-WithOpenOcd {
 
     # OpenOCD treats backslashes in Tcl command arguments as escapes. The
     # script runs from the project root, so a relative path avoids that issue.
-    $openOcdCommand = "flash write_image erase build/$TargetName.bin 0x08000000"
+    $openOcdCommand = "flash write_image erase $BuildSubdirectory/$TargetName.bin 0x08000000"
     & $openOcd -f $config -c init -c "reset halt" -c $openOcdCommand -c reset -c shutdown
     if ($LASTEXITCODE -ne 0) {
         throw "OpenOCD download failed with exit code: $LASTEXITCODE"

@@ -157,6 +157,8 @@ void ChassisJump_Update(chassis_jump_cmd_e command, const ChassisJumpInput_s *in
     const float length_avg = 0.5f * (input->length[0] + input->length[1]);
     const float velocity_avg = 0.5f * (input->velocity[0] + input->velocity[1]);
     const uint8_t squat_req = command == CHASSIS_JUMP_HELD;
+    const uint8_t start_phase = jump_ph;
+    float length_step = 0.0f;
 
     switch (jump_ph)
     {
@@ -203,11 +205,13 @@ void ChassisJump_Update(chassis_jump_cmd_e command, const ChassisJumpInput_s *in
 
             jump_squat_acc_now = (jump_squat_vramp - vold) * 1000.0f;
 
+            const float previous_length = jump_squat_ramp;
             jump_squat_ramp -= jump_squat_vramp * 0.001f;
 
             if (remain > 0.0f && jump_squat_ramp < jump_squat_len)
                 jump_squat_ramp = jump_squat_len;
 
+            length_step = jump_squat_ramp - previous_length;
             jump_squat_vlim = vlim;
             jump_squat_vref = -jump_squat_vramp;
         }
@@ -292,6 +296,7 @@ void ChassisJump_Update(chassis_jump_cmd_e command, const ChassisJumpInput_s *in
         {
             jump_push_vramp += a_base * 0.001f;
             if (jump_push_vramp > v_base) jump_push_vramp = v_base;
+            const float previous_length = jump_push_ramp;
             jump_push_ramp += jump_push_vramp * 0.001f;
             if (jump_push_ramp > jump_impulse_at) jump_push_ramp = jump_impulse_at;
 
@@ -304,6 +309,7 @@ void ChassisJump_Update(chassis_jump_cmd_e command, const ChassisJumpInput_s *in
             {
                 jump_push_vref    = jump_push_vramp;
                 jump_push_acc_now = a_base;
+                length_step = jump_push_ramp - previous_length;
             }
             jump_push_imp_k   = 0.0f;
 
@@ -323,6 +329,9 @@ void ChassisJump_Update(chassis_jump_cmd_e command, const ChassisJumpInput_s *in
                 jump_push_imp_k = r;
             }
 
+            /* 冲量段的位置目标随测量值追赶。摩擦前馈沿既有蹬地速度计划伸腿。 */
+            if (!jump_dry_run)
+                length_step = v_total * 0.001f;
             jump_push_ramp    = jump_push_len_avg + 0.005f;
             jump_push_vref    = velocity_avg;
             jump_push_acc_now = 0.0f;
@@ -432,9 +441,12 @@ void ChassisJump_Update(chassis_jump_cmd_e command, const ChassisJumpInput_s *in
 
         jump_shrink_acc_now = (jump_shrink_vramp - vold) * 1000.0f;
 
+        const float previous_length = jump_shrink_ramp;
         jump_shrink_ramp -= jump_shrink_vramp * 0.001f;
         if (remain > 0.0f && jump_shrink_ramp < jump_air_len)
             jump_shrink_ramp = jump_air_len;
+        if (!jump_dry_run)
+            length_step = jump_shrink_ramp - previous_length;
 
         {
             float el = input->length[0] - jump_air_len;
@@ -528,6 +540,7 @@ void ChassisJump_Update(chassis_jump_cmd_e command, const ChassisJumpInput_s *in
         jump_land_vref = 0.0f;
         if (jump_land_buf_done)
         {
+            const float previous_length = jump_land_ramp;
             float lerr = input->stand_length - jump_land_ramp;
             if (fabsf(lerr) > 0.0005f)
             {
@@ -541,6 +554,7 @@ void ChassisJump_Update(chassis_jump_cmd_e command, const ChassisJumpInput_s *in
                 else
                     jump_land_ramp  = input->stand_length;
             }
+            length_step = jump_land_ramp - previous_length;
         }
 
         {
@@ -566,6 +580,8 @@ void ChassisJump_Update(chassis_jump_cmd_e command, const ChassisJumpInput_s *in
         break;
     }
 
+    /* 切相重锚的参考位置可以跳变，只有相位内的计划运动进入前馈。 */
+    ref->length_step = jump_ph == start_phase ? length_step : 0.0f;
     ref->active = jump_ph != JP_IDLE;
     ref->wheel_theta_scale = jump_ph == JP_SQUAT ? jump_squat_tw_theta_scale : 1.0f;
     ref->hip_pitch_scale = jump_ph == JP_PUSH ? jump_push_tp_phi_scale : 1.0f;
@@ -593,7 +609,10 @@ void ChassisJump_Update(chassis_jump_cmd_e command, const ChassisJumpInput_s *in
             const float error = goal - jump_idle_ramp;
             const float step = jump_land_rate * 0.001f;
             if (fabsf(error) > 0.0005f)
-                jump_idle_ramp += fminf(step, fmaxf(-step, error));
+            {
+                ref->length_step = fminf(step, fmaxf(-step, error));
+                jump_idle_ramp += ref->length_step;
+            }
             else
             {
                 jump_idle_ramp = goal;

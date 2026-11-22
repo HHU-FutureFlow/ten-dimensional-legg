@@ -30,6 +30,9 @@ void RobotInit()
     
     BSPInit();
 
+#if WHEELLEG_DEBUG_MODE
+    DebugModeInit();
+#else
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
     RobotCMDInit();
     // GimbalInit();
@@ -40,6 +43,8 @@ void RobotInit()
     ChassisInit();
     GimbalInit();
     // ShootInit();
+#endif
+
 #endif
 
     OSTaskInit(); // 创建基础任务

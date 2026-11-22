@@ -35,8 +35,10 @@ void  r_Alpha_beta_calculate(float r_motor_big_leg,float r_motor_small_leg,float
      * 旧 31.17°x2 装配常数属旧编码器零点，已并入偏置。
      * 自检：左腿新偏置 6.60945 ≈ 旧 0.32781 + 2π(跨圈) = 6.61100，差 0.0016 rad。
      * 右 β 三代对比：1.64771(第2代) / 1.57548(第3代) / 1.60487(本次)，本次居中。 */
-    r_leg->r_alpha = (r_motor_big_leg - 0.61246f);
-    r_leg->r_beta = -(r_motor_big_leg - r_motor_small_leg) + 1.60487f;
+    /* 2026-11-22 落地后伸对称姿态，以左腿为基准反推右腿偏置。
+     * α 零点 0.61246 → 0.6563325，β 偏置 1.60487 → 1.5423093。 */
+    r_leg->r_alpha = r_motor_big_leg - 0.6563325f;
+    r_leg->r_beta = -(r_motor_big_leg - r_motor_small_leg) + 1.5423093f;
     r_leg->r_alpha = wrap_angle(r_leg->r_alpha, -PI);
     r_leg->r_beta  = protect_full_extension(wrap_angle(r_leg->r_beta, BETA_WRAP_LO));
     r_leg->r_dalpha = r_motor_big_speed;

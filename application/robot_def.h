@@ -33,6 +33,11 @@
 #define WHEELLEG_REMOTE_MODE WHEELLEG_REMOTE_SBUS
 #define WHEELLEG_VT02_FALLBACK 1 /* SBUS/DBUS 离线时允许 VT‑02 接管，设为 0 可关闭 */
 
+/* CMake 的台架构建注入 1；默认入口使用普通固件。 */
+#ifndef WHEELLEG_DEBUG_MODE
+#define WHEELLEG_DEBUG_MODE 0
+#endif
+
 /* 首次整合用现有底盘做基线构建，跳跃和三组常态试验分别在编译时开启。 */
 #ifndef WHEELLEG_JUMP_ENABLE
 #define WHEELLEG_JUMP_ENABLE 0

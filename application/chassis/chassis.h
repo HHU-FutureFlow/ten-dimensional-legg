@@ -86,8 +86,8 @@ typedef struct
     float Fleg_cmd[2];
     float Ldot[2];        /* [0]左 [1]右，腿长速度估计（m/s），低通后 */
     float joint_T_cmd[4];
-    float fric_ff[4];     /* [0]r_f [1]r_b [2]l_f [3]l_b，本拍实际叠加的关节摩擦前馈(N·m) */
-    float wheel_ff[2];    /* [0]左轮 [1]右轮，本拍实际叠加的轮端摩擦前馈(N·m) */
+    float fric_ff[4];     /* [0]r_f [1]r_b [2]l_f [3]l_b，限幅后实际生效的关节摩擦前馈(N·m) */
+    float wheel_ff[2];    /* [0]左轮 [1]右轮，限幅后实际生效的轮端摩擦前馈(N·m) */
     float Tw_cmd[2];
     float Roll;           /* IMU roll，度，调试 roll 补偿用 */
     float dFroll;         /* roll 补偿力差 ΔF（N），右腿为正 */
@@ -95,6 +95,10 @@ typedef struct
     /* ===== T3/T4 翻倒保护（2026-11-05, ep 观察）===== */
     float theta_body[2];  /* [0]左 [1]右, 机体系摆角 = l_theta + Pitch·rad（纯编码器量） */
     float prot;           /* bit0=监控使能 prot_enable, bit1=态4已武装 prot_armed */
+    float joint_T_base[4];    /* VMC 后电机轴基础力矩，N·m */
+    float wheel_T_base[2];    /* 轮端基础力矩，N·m，前进为正 */
+    float joint_ref_speed[4]; /* 摩擦前馈使用的电机轴参考速度，rad/s */
+    float wheel_ref_speed[2]; /* 摩擦前馈使用的轮缘参考速度，m/s */
 } Chassis_Dbg_s;
 extern volatile Chassis_Dbg_s chassis_dbg;
 

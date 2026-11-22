@@ -1,4 +1,5 @@
 #include "chassis.h"
+#include "chassis_actuators.h"
 #include "chassis_jump.h"
 #include "robot_def.h"
 #include "power_control.h"
@@ -51,34 +52,19 @@ static Chassis_Ctrl_Cmd_s chassis_cmd_recv;
 /* YAW_COEF_LEG 已删除: 腿角项系数 (R+l)/(2R_L) 含腿长, 改为 ChassisTask 内
  * 用 rec_l_rise 现算联动, 防止改站立腿长时忘同步偏航模型(2026-11-05)。 */
 
-/* ===== 关节库仑摩擦前馈（2026-10-30）=====
- * 实测左髋静摩擦 ≥2 N·m（右腿可随意掰动，左腿小腿需相当力气），死区让 LQR 的
- * 差动 Tp 全被右腿吸收（剪刀只走一条腿）。补偿加在各自关节、电机自身坐标：
- *   T_ff = T_c * tanh(ω / ω0)
- * tanh 平滑过零防 1kHz 抖振。T_c 为 volatile 全局，可在调试器在线调：
- * 左腿 0.5 起调（手测静摩擦大），右腿先 0（过补会变负阻尼、诱发极限环）。
- * 判据：左右腿手掰阻力对称；注意 ω=0 时补偿为 0，静止突破仍靠平衡自振。 */
-volatile float l_joint_fric_t = 0.55f;   /* N·m/关节, 左腿 */
-volatile float r_joint_fric_t = 0.35f;   /* N·m/关节, 右腿 */
-/* 悬空专用关节摩擦前馈(2026-11-15): 悬空时载荷相关摩擦塌缩(差一个量级),
- * 沿用着地 Tc 必过补 → 负阻尼(前日提车摆腿发散)。
- * 默认 0 = 悬空跳过起安全基线, 后续从 0 起步在线标定:
- * 自激摆动 = 过补回退一半, 回正/摆动中途粘滞 = 欠补加量。态7 翻身不切这套
- * (该位形 GRF 未标定 air 易误判, 且翻身摆腿要摩擦前馈突破左髋静摩擦)。 */
-volatile float l_joint_fric_t_air = 0.0f; /* N·m/关节, 左腿悬空 */
-volatile float r_joint_fric_t_air = 0.0f; /* N·m/关节, 右腿悬空 */
-#define FRICTION_TANH_W0  (0.15f)       /* rad/s, tanh 速度平滑尺度 */
+/* 2026-11-22 台架等效运动摩擦候选，N·m。带载运行待验证。
+ * 关节顺序与 chassis_dbg 一致（右大腿、右小腿、左大腿、左小腿），轮为左、右。 */
+static const float joint_friction_nm[4] = {1.42f, 0.70f, 0.89f, 0.94f};
+static const float wheel_friction_nm[2] = {0.04f, 0.10f};
+#define FRICTION_TANH_W0       (0.15f) /* rad/s, 电机轴 */
+#define WHEEL_FRICTION_TANH_V0 (0.03f) /* m/s, 轮缘 */
+#define CHASSIS_TICK_S         (0.001f)
 
-/* ===== 轮端库仑摩擦前馈（2026-10-31）=====
- * 手感实测右轮毂电机阻尼大于左轮（自改减速箱装配差异），轮端摩擦同样吃掉
- * 平衡环的小 Tw 修正与推车时的滚动 -> 单腿摆动不对称的轮端成因。
- * 补偿按"前进为正"的轮速（r_wheel.r_dx / l_wheel.l_dx，m/s，左轮符号已翻正）
- * 加在 Tw 上、限幅之前；左轮 l_wheel_direction=-1 的坐标换算在其后，随之落位。
- * T_c volatile 在线调：右 0.10 / 左 0.05 起调（右轮阻尼大故给多），
- * 过大 = 轮速通道负阻尼 -> 平衡低频抖动，出现即减半。tanh(0)=0 静止无自发力。 */
-volatile float r_wheel_fric_t = 0.15f;  /* N·m/轮, 右轮 */
-volatile float l_wheel_fric_t = 0.05f;  /* N·m/轮, 左轮 */
-#define WHEEL_FRICTION_TANH_V0 (0.03f)  /* m/s, tanh 速度平滑尺度(轮缘线速度) */
+typedef struct
+{
+    float length_step; /* 本拍计划的腿长增量，m */
+    float theta_speed; /* 本拍主动参考摆速，rad/s */
+} LegFrictionPlan_s;
 
 /* ===== 腿长刚度 + Roll 补偿（2026-11-01 加强,原为宏 800/100/100/10）=====
  * 加强依据: 右倾1.3°的静态偏移 = 腿长下垂差(6.5N/800≈8mm→1.0°) + roll补偿过弱
@@ -302,16 +288,11 @@ static void ChassisDbgLqr(const ten_balance_observation *o)
     chassis_dbg.lqr_x[8] = o->phi;      chassis_dbg.lqr_x[9] = o->dphi;
 }
 
-void ChassisInit()
+void ChassisActuatorsInit(ChassisActuators_s *motors)
 {
-    chassis_IMU_data = INS_Init();
-    GRF_Init(); /* GRF 地面反作用力观测器（手册第九章 T1） */
-
-    chassis_cmd_sub = SubRegister("chassis_cmd", sizeof(Chassis_Ctrl_Cmd_s));
-
     Motor_Init_Config_s r_config = {
         .can_init_config = {
-            .can_handle = &hcan1,            
+            .can_handle = &hcan1,
         },
         .controller_setting_init_config = {
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
@@ -320,11 +301,11 @@ void ChassisInit()
 
     r_config.can_init_config.tx_id = 2;
     r_config.can_init_config.rx_id = 2;
-    r_front_8009_motor = DMMotorInit(&r_config);
+    motors->r_front_8009_motor = DMMotorInit(&r_config);
 
     r_config.can_init_config.tx_id = 3;
     r_config.can_init_config.rx_id = 3;
-    r_behind_8009_motor = DMMotorInit(&r_config);
+    motors->r_behind_8009_motor = DMMotorInit(&r_config);
 
     Motor_Init_Config_s l_config =
     {
@@ -338,12 +319,11 @@ void ChassisInit()
 
     l_config.can_init_config.tx_id = 5;
     l_config.can_init_config.rx_id = 5;
-    l_front_8009_motor = DMMotorInit(&l_config);
+    motors->l_front_8009_motor = DMMotorInit(&l_config);
 
     l_config.can_init_config.tx_id = 4;
     l_config.can_init_config.rx_id = 4;
-    l_behind_8009_motor = DMMotorInit(&l_config);
-
+    motors->l_behind_8009_motor = DMMotorInit(&l_config);
 
     Motor_Init_Config_s chassis_motor_config = {
         .can_init_config.can_handle = &hcan2,
@@ -372,36 +352,98 @@ void ChassisInit()
     chassis_motor_config.can_init_config.tx_id = 1;
     chassis_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
 
-    l_wheel_motor = PowerControlInit(&chassis_motor_config);
-
+    motors->l_wheel_motor = PowerControlInit(&chassis_motor_config);
 
 
     chassis_motor_config.can_init_config.tx_id = 2;
     chassis_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
 
-    r_wheel_motor = PowerControlInit(&chassis_motor_config);
-
-
-
-
-    /* 腿长 P-P 级联（手册 §8.1）取代原单环 PID：
-     * F = 重力前馈 + Kp_pos*(Ldes-L) - Kv_vel*Ldot
-     * 正方向：F>0 = 伸腿（VMC.c 的 Tf=-gF, Tb=+gF 链路，实车已验证）。 */
-
-
-
-    
-
-    
-
+    motors->r_wheel_motor = PowerControlInit(&chassis_motor_config);
 }
 
+void ChassisInit()
+{
+    chassis_IMU_data = INS_Init();
+    GRF_Init(); /* GRF 地面反作用力观测器（手册第九章 T1） */
 
+    chassis_cmd_sub = SubRegister("chassis_cmd", sizeof(Chassis_Ctrl_Cmd_s));
+
+    ChassisActuators_s motors;
+    ChassisActuatorsInit(&motors);
+    r_front_8009_motor = motors.r_front_8009_motor;
+    r_behind_8009_motor = motors.r_behind_8009_motor;
+    l_front_8009_motor = motors.l_front_8009_motor;
+    l_behind_8009_motor = motors.l_behind_8009_motor;
+    l_wheel_motor = motors.l_wheel_motor;
+    r_wheel_motor = motors.r_wheel_motor;
+}
 
 /* 角度差 wrap 到 ±π（统一状态机连续角跟踪用, 2026-11-09） */
 static float rec_wrap_pi(float a)
 {
     return a - 2.0f * PI * roundf(a / (2.0f * PI));
+}
+
+/* 虚拟腿长的逆解与台架一致。关节在机体系为 θ∓β/2，
+ * 左腿按 VMC 输出约定换回电机轴坐标。重锚和静止拍的长度增量为零。 */
+static void JointReferenceSpeed(LegFrictionPlan_s plan, float length, float thigh, float shin,
+                                float motor_sign, float speed[2])
+{
+    float half_beta_speed = 0.0f;
+    if (plan.length_step != 0.0f)
+    {
+        const float before = length - plan.length_step;
+        if (!isfinite(length) || !isfinite(before) || before <= 0.0f || length <= 0.0f)
+            return;
+
+        float cos_before = (before * before + thigh * thigh - shin * shin) / (2.0f * before * thigh);
+        float cos_now = (length * length + thigh * thigh - shin * shin) / (2.0f * length * thigh);
+        if (fabsf(cos_before) > 1.0f || fabsf(cos_now) > 1.0f)
+            return;
+
+        half_beta_speed = (acosf(cos_now) - acosf(cos_before)) / CHASSIS_TICK_S;
+    }
+    if (!isfinite(plan.theta_speed))
+        return;
+
+    speed[0] = motor_sign * (plan.theta_speed - half_beta_speed);
+    speed[1] = motor_sign * (plan.theta_speed + half_beta_speed);
+}
+
+/* 追赶目标由反馈位置重写。按到终点的剩余角与现有超前量给参考速度，
+ * 到位带内取消摆动前馈，PD 实测速度项继续制动。 */
+static float ChaseReferenceSpeed(float remaining, float tolerance, float ahead)
+{
+    if (!isfinite(remaining) || !isfinite(ahead) || ahead <= 0.0f)
+        return 0.0f;
+
+    const float travel = fmaxf(0.0f, fabsf(remaining) - tolerance);
+    return copysignf(rec_done_zero_rate * fminf(1.0f, travel / ahead), remaining);
+}
+
+static float MotorTorqueWithFriction(float base, float speed, float friction, float smoothing,
+                                     float limit, uint8_t blocked, volatile float *base_dbg,
+                                     volatile float *ff_dbg)
+{
+    if (blocked || !isfinite(base))
+    {
+        *base_dbg = *ff_dbg = 0.0f;
+        return 0.0f;
+    }
+
+    *base_dbg = base;
+    float limited_base = base;
+    LIMIT_MIN_MAX(limited_base, -limit, limit);
+    if (!isfinite(speed) || speed == 0.0f)
+    {
+        *ff_dbg = 0.0f;
+        return limited_base;
+    }
+
+    float command = base + friction * tanhf(speed / smoothing);
+    LIMIT_MIN_MAX(command, -limit, limit);
+    *ff_dbg = command - limited_base;
+    return command;
 }
 
 typedef enum
@@ -444,14 +486,15 @@ static uint8_t ChassisProtectedAirMask(uint8_t step_leg_mask)
     return GRF_GetAirMask() & normal_lqr_wheels;
 }
 
-static void StepLegMotion_Update(volatile StepLegMotion_s *leg, uint8_t hit,
-                                 float theta_body, float measured_length)
+static LegFrictionPlan_s StepLegMotion_Update(volatile StepLegMotion_s *leg, uint8_t hit,
+                                              float theta_body, float measured_length)
 {
+    LegFrictionPlan_s plan = {0};
     const float rear_angle = -0.5f * PI;
     if (leg->phase == STEP_LEG_IDLE)
     {
         if (!hit)
-            return;
+            return plan;
         leg->phase = STEP_LEG_BACKSWING;
     }
     /* 命中后先锁轮；等反馈有效才从实际腿长开始生成动作参考。 */
@@ -459,11 +502,12 @@ static void StepLegMotion_Update(volatile StepLegMotion_s *leg, uint8_t hit,
     {
         if (leg->phase == STEP_LEG_READY)
             leg->phase = STEP_LEG_RETURN;
-        return;
+        return plan;
     }
     if (leg->length_target <= 0.0f)
         leg->length_target = measured_length;
 
+    const float previous_length = leg->length_target;
     const float rear_error = rec_wrap_pi(rear_angle - theta_body);
     const float low_error = rec_wrap_pi(rec_theta_end - theta_body);
     const uint8_t rear_reached = fabsf(rear_error) <= STEP_LEG_REAR_ALIGN_EPS;
@@ -500,6 +544,12 @@ static void StepLegMotion_Update(volatile StepLegMotion_s *leg, uint8_t hit,
     float error = leg->phase <= STEP_LEG_TUCK ? rear_error : low_error;
     LIMIT_MIN_MAX(error, -rec_chase_push, rec_chase_push);
     leg->theta_body_target = theta_body + error;
+    plan.length_step = leg->length_target - previous_length;
+    if (leg->phase == STEP_LEG_BACKSWING)
+        plan.theta_speed = ChaseReferenceSpeed(rear_error, STEP_LEG_REAR_ALIGN_EPS, rec_chase_push);
+    else if (leg->phase == STEP_LEG_RETURN)
+        plan.theta_speed = ChaseReferenceSpeed(low_error, STEP_LEG_READY_ANGLE_TOL, rec_chase_push);
+    return plan;
 }
 
 #if WHEELLEG_JUMP_ENABLE || WHEELLEG_BALANCE_THETA_LEVEL
@@ -621,8 +671,17 @@ void ChassisTask()
         zero_force_last = zero_force;
     }
     if (zero_force)
-        return; /* 停机标志已生效,本拍不再计算控制量 */
+    {
+        for (unsigned i = 0; i < 4; ++i)
+            chassis_dbg.joint_T_base[i] = chassis_dbg.fric_ff[i] =
+                chassis_dbg.joint_T_cmd[i] = chassis_dbg.joint_ref_speed[i] = 0.0f;
+        for (unsigned i = 0; i < 2; ++i)
+            chassis_dbg.wheel_T_base[i] = chassis_dbg.wheel_ff[i] =
+                chassis_dbg.Tw_cmd[i] = chassis_dbg.wheel_ref_speed[i] = 0.0f;
+        return; /* 电机停机标志已生效 */
+    }
 
+    LegFrictionPlan_s plan_l = {0}, plan_r = {0};
     const float prev_len_l = ten_targets.l_leg_length_target;
     const float prev_len_r = ten_targets.r_leg_length_target;
 
@@ -677,6 +736,8 @@ void ChassisTask()
     /* 遥控挡位腿长斜坡跟踪(2026-11-15): 目标<0.1=未配置(保持 rec_l_rise, 兼容
      * NONE 编译/未接遥控), 其余 clamp [0.15,0.40](K 带全覆盖上界, 高于机械底)。
      * 任一轮离地时暂停更换挡位目标，承载恢复后由现有腿长斜坡继续跟挡。 */
+    const float previous_switch_length = leg_len_cmd_ramp;
+    float switch_length_step = 0.0f;
     if (!protected_air_at_start)
     {
         float leg_len_cmd = chassis_cmd_recv.leg_length_target;
@@ -687,6 +748,7 @@ void ChassisTask()
             LIMIT_MIN_MAX(leg_len_cmd, 0.15f, 0.40f);
             if (leg_len_cmd_ramp < leg_len_cmd) { leg_len_cmd_ramp += leg_switch_rate; if (leg_len_cmd_ramp > leg_len_cmd) leg_len_cmd_ramp = leg_len_cmd; }
             else if (leg_len_cmd_ramp > leg_len_cmd) { leg_len_cmd_ramp -= leg_switch_rate; if (leg_len_cmd_ramp < leg_len_cmd) leg_len_cmd_ramp = leg_len_cmd; }
+            switch_length_step = leg_len_cmd_ramp - previous_switch_length;
         }
     }
     /* 变腿长时 yaw 模型系数跟随当前生效目标(上一拍值, 慢变斜坡无妨)联动,
@@ -709,6 +771,7 @@ void ChassisTask()
      * 接管(θ 收零/重锚完成前状态机仍短暂写)。腿长目标全程由状态机置位。 */
     /* drive 在函数级作用域: 目标生成分支共用 */
     uint8_t drive = (chassis_cmd_recv.chassis_mode == CHASSIS_WHEELLEG_DRIVE);
+    float turn_speed = 0.0f;
     if (chassis_cmd_recv.chassis_mode == CHASSIS_STANDING_TEST)
     {
         /* 站立调试基线: 除 yaw 外全零(腿长0.25m=rec_l_rise已在上方设置)。
@@ -747,7 +810,10 @@ void ChassisTask()
             ten_targets.ds_target = 0.0f;
         }
         if (!protected_air_at_start)
-            ten_targets.yaw_target += chassis_cmd_recv.wz * 0.001f; /* ChassisTask 1kHz */
+        {
+            turn_speed = chassis_cmd_recv.wz;
+            ten_targets.yaw_target += turn_speed * CHASSIS_TICK_S;
+        }
         ten_targets.dyaw_target = 0.0f;
     }
         else
@@ -857,6 +923,7 @@ void ChassisTask()
     static uint16_t tilt4_t = 0;
     static uint16_t tilt4_hold = 0;
     static float tilt4_l = 0.25f, tilt4_r = 0.25f;
+    const uint8_t recovery_stage = prone_rec_state;
     if (prone_rec_state == PRS_FLIP)
     {
         /* 启动闸门: seen_zf 已在零力进入沿记录(本块内的记录不可达, 零力期任务 return);
@@ -884,10 +951,13 @@ void ChassisTask()
                 tilt4_hold = 0;
             }
             tilt4_t++;
+            const float before_l = tilt4_l, before_r = tilt4_r;
             if (tilt4_l < prot_l_max) tilt4_l += prot_l_speed;
             if (tilt4_r < prot_l_max) tilt4_r += prot_l_speed;
             ten_targets.l_leg_length_target = tilt4_l;
             ten_targets.r_leg_length_target = tilt4_r;
+            plan_l.length_step = tilt4_l - before_l;
+            plan_r.length_step = tilt4_r - before_r;
             /* 追赶式摆角目标（世界系 θ 目标仅占位, LQR 输出随后被覆盖） */
             float dir = prot_dir_sign * ((pitch_rad < prot_pitch_back) ? 1.0f : -1.0f);
             float step_l = prot_step, step_r = prot_step;
@@ -911,6 +981,11 @@ void ChassisTask()
             else
             {
                 tilt4_hold = 0;
+                if (prot_step > 0.0f)
+                {
+                    plan_l.theta_speed = dir * rec_done_zero_rate * step_l / prot_step;
+                    plan_r.theta_speed = dir * rec_done_zero_rate * step_r / prot_step;
+                }
             }
             if (tilt4_t > prot_timeout)
             {   /* 超时: 回脱力等重新切档, 防卡死顶死。
@@ -970,12 +1045,15 @@ void ChassisTask()
             rec6_t = 0; rec6_hold = 0;
         }
         /* 腿长斜坡: 20cm/s 逼近目标(必要阶梯, 防弹车) */
+        const float before_l = ext_l, before_r = ext_r;
         if (ext_l < rec_l_rise) ext_l += rec_extend_rate;
         if (ext_l > rec_l_rise) ext_l -= rec_extend_rate;
         if (ext_r < rec_l_rise) ext_r += rec_extend_rate;
         if (ext_r > rec_l_rise) ext_r -= rec_extend_rate;
         ten_targets.l_leg_length_target = ext_l;
         ten_targets.r_leg_length_target = ext_r;
+        plan_l.length_step = ext_l - before_l;
+        plan_r.length_step = ext_r - before_r;
         if (fabsf(ten_balance_observe.l_leg_length - rec_l_rise) < rec_eps_len &&
             fabsf(ten_balance_observe.r_leg_length - rec_l_rise) < rec_eps_len)
         {
@@ -1100,6 +1178,8 @@ void ChassisTask()
         len_cmd_r += step_r;
         ten_targets.l_leg_length_target = len_cmd_l;
         ten_targets.r_leg_length_target = len_cmd_r;
+        plan_l.length_step = step_l;
+        plan_r.length_step = step_r;
         if (fabsf(end_l - cont_l) < rec_align_eps &&
             fabsf(end_r - cont_r) < rec_align_eps)
         {
@@ -1228,6 +1308,7 @@ void ChassisTask()
             LIMIT_MIN_MAX(lift_r, rec_l_low, 0.40f);
             lift_anchor = 1;
         }
+        const float before_l = lift_l, before_r = lift_r;
         if (lift_l < rec_l_rise)
         {
             lift_l += rec_lift_rate;
@@ -1241,15 +1322,24 @@ void ChassisTask()
         /* 双腿到顶沿(2026-11-15): 挡位斜坡重锚 rec_l_rise 防阶跃, 之后平衡/
          * 行驶/锁定的维持目标由遥控挡位接管(未配置时 ramp 恒 rec_l_rise,
          * 行为与旧版逐拍恒 rec_l_rise 完全一致)。 */
+        plan_l.length_step = lift_l - before_l;
+        plan_r.length_step = lift_r - before_r;
+        const uint8_t switching_length = lift_top;
         if (!lift_top && lift_l >= rec_l_rise && lift_r >= rec_l_rise)
         {
             leg_len_cmd_ramp = rec_l_rise;
+            if (lift_l != rec_l_rise)
+                plan_l.length_step = 0.0f;
+            if (lift_r != rec_l_rise)
+                plan_r.length_step = 0.0f;
             lift_top = 1;
         }
         if (lift_top)
         {
             lift_l = leg_len_cmd_ramp;
             lift_r = leg_len_cmd_ramp;
+            if (switching_length)
+                plan_l.length_step = plan_r.length_step = switch_length_step;
         }
         ten_targets.l_leg_length_target = lift_l;
         ten_targets.r_leg_length_target = lift_r;
@@ -1260,11 +1350,14 @@ void ChassisTask()
          * θ 目标交还正常路径。 */
         if (fabsf(rec_tht_l) > 0.01f || fabsf(rec_tht_r) > 0.01f)
         {
-            float st0 = rec_done_zero_rate * 0.001f;
+            const float before_theta_l = rec_tht_l, before_theta_r = rec_tht_r;
+            float st0 = rec_done_zero_rate * CHASSIS_TICK_S;
             if (fabsf(rec_tht_l) > st0) rec_tht_l -= (rec_tht_l > 0.0f) ? st0 : -st0; else rec_tht_l = 0.0f;
             if (fabsf(rec_tht_r) > st0) rec_tht_r -= (rec_tht_r > 0.0f) ? st0 : -st0; else rec_tht_r = 0.0f;
             ten_targets.l_theta_target = rec_tht_l;
             ten_targets.r_theta_target = rec_tht_r;
+            plan_l.theta_speed = (rec_tht_l - before_theta_l) / CHASSIS_TICK_S;
+            plan_r.theta_speed = (rec_tht_r - before_theta_r) / CHASSIS_TICK_S;
         }
         /* 起立完成重锚 s/yaw: S4 进入沿锚的 s_target 在拉起冲刺之前, 站直后 LQR
          * 会把前冲距离原路倒拉回去(实测"前冲再回冲")。pitch 回正后一次性重锚当前
@@ -1292,6 +1385,8 @@ void ChassisTask()
                 : cont_l + ((dl > 0.0f) ? ahead : -ahead);
         cur_r = (fabsf(dr) <= ahead) ? end_r
                 : cont_r + ((dr > 0.0f) ? ahead : -ahead);
+        plan_l.theta_speed = ChaseReferenceSpeed(end_l - cont_l, rec_align_eps, ahead);
+        plan_r.theta_speed = ChaseReferenceSpeed(end_r - cont_r, rec_align_eps, ahead);
     }
     dbg_goal_l = cur_l;   /* ep 可读: 当前摆角目标(连续角) */
     dbg_goal_r = cur_r;
@@ -1360,13 +1455,18 @@ void ChassisTask()
     StepCollision_Update(step_window_active, forward_drive, GRF_GetAirMask(), collision_sample);
     const uint8_t new_hits = step_collision_dbg.hit_mask & ~previous_hits;
 
+    /* 恢复阶段切换可能重锚控制目标，移除上一个阶段的前馈。 */
+    if (recovery_stage != prone_rec_state)
+        plan_l = plan_r = (LegFrictionPlan_s){0};
+
+    LegFrictionPlan_s step_plan_l = {0}, step_plan_r = {0};
     /* 窗口只限制新触发。已开始的动作独立收尾，急停和恢复状态优先。 */
     if (prone_rec_state == PRS_DONE)
     {
-        StepLegMotion_Update(&step_leg_motion[0], new_hits & GRF_AIR_LEFT,
-                             l_theta_body, ten_balance_observe.l_leg_length);
-        StepLegMotion_Update(&step_leg_motion[1], new_hits & GRF_AIR_RIGHT,
-                             r_theta_body, ten_balance_observe.r_leg_length);
+        step_plan_l = StepLegMotion_Update(&step_leg_motion[0], new_hits & GRF_AIR_LEFT,
+                                          l_theta_body, ten_balance_observe.l_leg_length);
+        step_plan_r = StepLegMotion_Update(&step_leg_motion[1], new_hits & GRF_AIR_RIGHT,
+                                          r_theta_body, ten_balance_observe.r_leg_length);
     }
     else
     {
@@ -1382,6 +1482,7 @@ void ChassisTask()
         lift_top = 0;
         ten_targets.l_leg_length_target = rec_l_low;
         ten_targets.r_leg_length_target = rec_l_low;
+        plan_l = plan_r = (LegFrictionPlan_s){0};
 
         /* 旧离地位可能记的是收腿阶段，清锁存后按正常节拍重新判定。 */
         GRF_ClearAirState();
@@ -1393,9 +1494,15 @@ void ChassisTask()
     const uint8_t step_leg_mask = StepLegMotion_ActiveMask();
     const uint8_t protected_air_mask = ChassisProtectedAirMask(step_leg_mask);
     if (protected_air_mask & GRF_AIR_LEFT)
+    {
         ten_targets.l_leg_length_target = prev_len_l;
+        plan_l.length_step = 0.0f;
+    }
     if (protected_air_mask & GRF_AIR_RIGHT)
+    {
         ten_targets.r_leg_length_target = prev_len_r;
+        plan_r.length_step = 0.0f;
+    }
 
     const uint8_t wheel_block_mask = step_leg_mask | protected_air_mask;
     const uint8_t optional_balance = (WHEELLEG_BALANCE_POSITION_HOLD ||
@@ -1432,6 +1539,7 @@ void ChassisTask()
             /* 跳跃的收腿与落地按相位给参考，左右离地位只决定各轮的输出。 */
             ten_targets.l_leg_length_target = jump_ref.length_target;
             ten_targets.r_leg_length_target = jump_ref.length_target;
+            plan_l.length_step = plan_r.length_step = jump_ref.length_step;
         }
         feedback.wheel_theta_scale = jump_ref.wheel_theta_scale;
         feedback.hip_pitch_scale = jump_ref.hip_pitch_scale;
@@ -1470,6 +1578,7 @@ void ChassisTask()
             step_targets.l_leg_length_target = step_leg_motion[0].length_target;
             step_targets.l_theta_target = step_leg_motion[0].theta_body_target - pitch_rad;
             step_targets.l_dtheta_target = -chassis_IMU_data->Gyro[0];
+            plan_l = step_plan_l;
         }
         if ((step_leg_mask & GRF_AIR_RIGHT) && step_leg_motion[1].length_target > 0.0f)
         {
@@ -1477,6 +1586,7 @@ void ChassisTask()
             step_targets.r_leg_length_target = step_leg_motion[1].length_target;
             step_targets.r_theta_target = step_leg_motion[1].theta_body_target - pitch_rad;
             step_targets.r_dtheta_target = -chassis_IMU_data->Gyro[0];
+            plan_r = step_plan_r;
         }
         control_targets = &step_targets;
     }
@@ -1684,86 +1794,61 @@ void ChassisTask()
     VMC_Calc(&four_control_datas, &r_leg_motor_torques, &r_leg);
     l_VMC_Calc(&four_control_datas, &l_leg_motor_torques, &l_leg);
 
-    /* 关节摩擦前馈：VMC 输出的 Tf/Tb 已是电机自身坐标，与 measure.velocity 同系，
-     * 直接同号叠加即可（左右腿各自的坐标约定在 VMC 内部已处理完）。
-     * 脱力等待期(S0/S7 未武装)跳过 —— 零力语义完整。 */
-    float ff_rf = 0.0f, ff_rb = 0.0f, ff_lf = 0.0f, ff_lb = 0.0f;
+    /* 基础力矩来自反馈控制，摩擦前馈在电机轴独立叠加。 */
+    float joint_speed[4] = {0};
     if (!out_gate)
     {
-        /* 悬空选 _air 系数(2026-11-15): 悬空载荷相关摩擦低一个量级, 沿用着地
-         * Tc 必过补成负阻尼(前日提车摆腿发散); 默认 0=跳过起安全基线,
-         * 从 0 起步在线标定。态7 翻身不切(air 易误判+翻身摆腿要前馈破静摩擦)。 */
-        float fric_t_r = wheel_block_r ? r_joint_fric_t_air : r_joint_fric_t;
-        float fric_t_l = wheel_block_l ? l_joint_fric_t_air : l_joint_fric_t;
-        /* 2026-11-20 右侧后摆停角更靠前，仅该侧后摆试调动摩擦前馈 0→0.10 N·m/关节（UNTESTED）。 */
-        if (step_leg_motion[1].phase == STEP_LEG_BACKSWING)
-            fric_t_r = 0.10f;
-        ff_rf = fric_t_r * tanhf(r_front_8009_motor->measure.velocity  / FRICTION_TANH_W0);
-        ff_rb = fric_t_r * tanhf(r_behind_8009_motor->measure.velocity / FRICTION_TANH_W0);
-        ff_lf = fric_t_l * tanhf(l_front_8009_motor->measure.velocity  / FRICTION_TANH_W0);
-        ff_lb = fric_t_l * tanhf(l_behind_8009_motor->measure.velocity / FRICTION_TANH_W0);
-        r_leg_motor_torques.r_Tf += ff_rf;
-        r_leg_motor_torques.r_Tb += ff_rb;
-        l_leg_motor_torques.l_Tf += ff_lf;
-        l_leg_motor_torques.l_Tb += ff_lb;
+        JointReferenceSpeed(plan_r, control_targets->r_leg_length_target,
+                            R_LEG_A, R_LEG_B, 1.0f, &joint_speed[0]);
+        JointReferenceSpeed(plan_l, control_targets->l_leg_length_target,
+                            L_LEG_A, L_LEG_B, -1.0f, &joint_speed[2]);
     }
 
-    chassis_dbg.joint_T_cmd[0] = r_leg_motor_torques.r_Tf;
-    chassis_dbg.joint_T_cmd[1] = r_leg_motor_torques.r_Tb;
-    chassis_dbg.joint_T_cmd[2] = l_leg_motor_torques.l_Tf;
-    chassis_dbg.joint_T_cmd[3] = l_leg_motor_torques.l_Tb;
-    chassis_dbg.fric_ff[0] = ff_rf;
-    chassis_dbg.fric_ff[1] = ff_rb;
-    chassis_dbg.fric_ff[2] = ff_lf;
-    chassis_dbg.fric_ff[3] = ff_lb;
+    DMMotorInstance *const joint_motor[4] = {
+        r_front_8009_motor, r_behind_8009_motor, l_front_8009_motor, l_behind_8009_motor,
+    };
+    const float joint_base[4] = {
+        r_leg_motor_torques.r_Tf, r_leg_motor_torques.r_Tb,
+        l_leg_motor_torques.l_Tf, l_leg_motor_torques.l_Tb,
+    };
+    for (unsigned i = 0; i < 4; ++i)
+    {
+        chassis_dbg.joint_ref_speed[i] = joint_speed[i];
+        const float command = MotorTorqueWithFriction(joint_base[i], joint_speed[i],
+                                                      joint_friction_nm[i], FRICTION_TANH_W0,
+                                                      DM_T_MAX, out_gate, &chassis_dbg.joint_T_base[i],
+                                                      &chassis_dbg.fric_ff[i]);
+        chassis_dbg.joint_T_cmd[i] = command;
+        DMMotorSetCtrlMode(joint_motor[i], DM_CTRL_TORQUE);
+        DMMotorSetRef(joint_motor[i], command);
+    }
 
-
-    // DMMotorStop(r_front_8009_motor);
-    // DMMotorStop(r_behind_8009_motor);
-    // DMMotorStop(l_front_8009_motor);
-    // DMMotorStop(l_behind_8009_motor);
-    // DJIMotorStop(l_wheel_motor);
-    // DJIMotorStop(r_wheel_motor);
-
-    DMMotorSetCtrlMode(r_front_8009_motor,  DM_CTRL_TORQUE);
-    DMMotorSetCtrlMode(r_behind_8009_motor, DM_CTRL_TORQUE);
-    DMMotorSetCtrlMode(l_front_8009_motor,  DM_CTRL_TORQUE);
-    DMMotorSetCtrlMode(l_behind_8009_motor, DM_CTRL_TORQUE);
-
-    /* l_VMC_Calc 已换回原电机坐标，左腿下发时不能再加负号。 */
-    DMMotorSetRef(r_front_8009_motor,
-        isfinite(r_leg_motor_torques.r_Tf) ? r_leg_motor_torques.r_Tf : 0.0f);
-    DMMotorSetRef(r_behind_8009_motor,
-        isfinite(r_leg_motor_torques.r_Tb) ? r_leg_motor_torques.r_Tb : 0.0f);
-    DMMotorSetRef(l_front_8009_motor,
-        isfinite(l_leg_motor_torques.l_Tf) ? l_leg_motor_torques.l_Tf : 0.0f);
-    DMMotorSetRef(l_behind_8009_motor,
-        isfinite(l_leg_motor_torques.l_Tb) ? l_leg_motor_torques.l_Tb : 0.0f);
-
-    /* 轮力矩在换算 C620 电流码前限幅。空轮连同摩擦前馈在最终输出闸清零，
-     * 支撑轮每拍照常下发，包含从离地转为承载的确认拍。 */
+    /* 左转为正，右轮参考速度较大。左右轮同用前进为正的坐标合成后限幅。 */
     const uint8_t wheel_gate = (prone_rec_state <= PRS_PUSH ||
                                 prone_rec_state == PRS_FLIP ||
                                 prone_rec_state == PRS_QUICK);
-    const uint8_t wheel_gate_r = wheel_gate || wheel_block_r;
-    const uint8_t wheel_gate_l = wheel_gate || wheel_block_l;
-    const float ff_rw = wheel_gate_r ? 0.0f : r_wheel_fric_t * tanhf(r_wheel.r_dx / WHEEL_FRICTION_TANH_V0);
-    const float ff_lw = wheel_gate_l ? 0.0f : l_wheel_fric_t * tanhf(l_wheel.l_dx / WHEEL_FRICTION_TANH_V0);
-    float r_Tw = wheel_gate_r ? 0.0f : four_control_datas.r_Tw + ff_rw;
-    float l_Tw = wheel_gate_l ? 0.0f : four_control_datas.l_Tw + ff_lw;
-    LIMIT_MIN_MAX(r_Tw, -WHEEL_T_MAX, WHEEL_T_MAX);
-    LIMIT_MIN_MAX(l_Tw, -WHEEL_T_MAX, WHEEL_T_MAX);
-    chassis_dbg.wheel_ff[0] = ff_lw;
-    chassis_dbg.wheel_ff[1] = ff_rw;
-    chassis_dbg.Tw_cmd[0] = l_Tw;
-    chassis_dbg.Tw_cmd[1] = r_Tw;
+    const uint8_t wheel_blocked[2] = {wheel_gate || wheel_block_l, wheel_gate || wheel_block_r};
+    float wheel_speed[2] = {0};
+    if (drive && !wheel_gate)
+    {
+        const float turn = TRACK_HALF_WIDTH * turn_speed;
+        const float scale = prone_rec_state == PRS_LQR_RAMP ? rec2_ramp : 1.0f;
+        wheel_speed[0] = scale * (ten_targets.ds_target - turn);
+        wheel_speed[1] = scale * (ten_targets.ds_target + turn);
+    }
 
-    /* isfinite 与关节侧同款护栏: LQR 状态异常(NaN)时不让 NaN 电流码下发 */
-    DJIMotorSetRef(r_wheel_motor, isfinite(r_Tw) ? WHEEL_T_PER_RAW * r_Tw : 0.0f);
-    DJIMotorSetRef(l_wheel_motor, l_wheel_direction * (isfinite(l_Tw) ? WHEEL_T_PER_RAW * l_Tw : 0.0f));
-
-    
-
-
+    DJIMotorInstance *const wheel_motor[2] = {l_wheel_motor, r_wheel_motor};
+    const float wheel_base[2] = {four_control_datas.l_Tw, four_control_datas.r_Tw};
+    const float wheel_direction[2] = {l_wheel_direction, 1.0f};
+    for (unsigned i = 0; i < 2; ++i)
+    {
+        chassis_dbg.wheel_ref_speed[i] = wheel_blocked[i] || !isfinite(wheel_speed[i]) ? 0.0f : wheel_speed[i];
+        const float command = MotorTorqueWithFriction(wheel_base[i], wheel_speed[i],
+                                                      wheel_friction_nm[i], WHEEL_FRICTION_TANH_V0,
+                                                      WHEEL_T_MAX, wheel_blocked[i], &chassis_dbg.wheel_T_base[i],
+                                                      &chassis_dbg.wheel_ff[i]);
+        chassis_dbg.Tw_cmd[i] = command;
+        DJIMotorSetRef(wheel_motor[i], wheel_direction[i] * WHEEL_T_PER_RAW * command);
+    }
 
 }

@@ -7,17 +7,21 @@
 #include "cmsis_os.h"
 
 #include "robot.h"
+#include "robot_def.h"
 #include "ins_task.h"
 #include "motor_task.h"
 #include "referee_task.h"
 #include "master_process.h"
 #include "daemon.h"
 #include "HT04.h"
+#include "dmmotor.h"
 #include "buzzer.h"
 
 #include "bsp_log.h"
 
-#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
+#if WHEELLEG_DEBUG_MODE
+#include "debug_mode.h"
+#elif defined(ONE_BOARD) || defined(CHASSIS_BOARD)
 #include "chassis.h"
 #endif
 
@@ -41,31 +45,42 @@ void StartCHASSISTASK(void const *argument);
  */
 void OSTaskInit()
 {
+#if !WHEELLEG_DEBUG_MODE
     osThreadDef(instask, StartINSTASK, osPriorityAboveNormal, 0, 1024);
     insTaskHandle = osThreadCreate(osThread(instask), NULL); // 由于是阻塞读取传感器,为姿态解算设置较高优先级,确保以1khz的频率执行
     // // 后续修改为读取传感器数据准备好的中断处理,
 
+#endif
     osThreadDef(motortask, StartMOTORTASK, osPriorityNormal, 0, 256);
     motorTaskHandle = osThreadCreate(osThread(motortask), NULL);
 
     osThreadDef(daemontask, StartDAEMONTASK, osPriorityNormal, 0, 128);
     daemonTaskHandle = osThreadCreate(osThread(daemontask), NULL);
 
+#if !WHEELLEG_DEBUG_MODE
     osThreadDef(robottask, StartROBOTTASK, osPriorityNormal, 0, 1024);
     robotTaskHandle = osThreadCreate(osThread(robottask), NULL);
+#endif
 
     /* 平衡底盘必须 1 kHz：LQR 的延迟裕度和控制周期强相关。
      * 200 Hz(5ms) 下额外链路延迟只要 2ms 就发散，1 kHz 能容忍 8ms。
      * 详见 lqr_sim/delay_check.py 与 README.md。 */
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
+#if WHEELLEG_DEBUG_MODE
+    /* 保留台架姿态观测的额外栈空间。普通底盘沿用已验证配置。 */
+    osThreadDef(chassistask, StartCHASSISTASK, osPriorityAboveNormal, 0, 2048);
+#else
     osThreadDef(chassistask, StartCHASSISTASK, osPriorityAboveNormal, 0, 1024);
+#endif
     chassisTaskHandle = osThreadCreate(osThread(chassistask), NULL);
 #endif
 
+#if !WHEELLEG_DEBUG_MODE
     osThreadDef(uitask, StartUITASK, osPriorityNormal, 0, 512);
     uiTaskHandle = osThreadCreate(osThread(uitask), NULL);
 
-   DMMotorControlInit();
+#endif
+    DMMotorControlInit();
 }
 
 __attribute__((noreturn)) void StartINSTASK(void const *argument)
@@ -152,7 +167,11 @@ __attribute__((noreturn)) void StartCHASSISTASK(void const *argument)
     for (;;)
     {
         chassis_start = DWT_GetTimeline_ms();
+#if WHEELLEG_DEBUG_MODE
+        DebugModeTask();
+#else
         ChassisTask();
+#endif
         chassis_dt = DWT_GetTimeline_ms() - chassis_start;
         if (chassis_dt > 1)
             LOGERROR("[freeRTOS] CHASSIS Task is being DELAY! dt = [%f]", &chassis_dt);
