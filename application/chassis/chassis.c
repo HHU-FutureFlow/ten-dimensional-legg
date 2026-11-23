@@ -25,9 +25,6 @@ static DMMotorInstance *r_front_8009_motor,*r_behind_8009_motor;
 static DMMotorInstance *l_front_8009_motor, *l_behind_8009_motor;
 static DJIMotorInstance *l_wheel_motor, *r_wheel_motor;
 
-static PIDInstance l_theta_pid;
-static PIDInstance r_theta_pid;
-
 /* cmd层指令订阅: chassis_cmd 话题,robot_cmd 200Hz发布 */
 static Subscriber_t *chassis_cmd_sub;
 static Chassis_Ctrl_Cmd_s chassis_cmd_recv;
