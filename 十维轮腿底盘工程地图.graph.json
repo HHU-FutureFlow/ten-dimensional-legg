@@ -2,11 +2,11 @@
   "schemaVersion": 2,
   "projectId": "project_1c20792b-82d4-4cbe-8cf0-437e0c68705b",
   "title": "十维轮腿底盘 · 工程地图",
-  "revision": 3,
+  "revision": 109,
   "rootSceneId": "root",
   "sourceRoots": {
     "firmware": {
-      "label": "ten-dimensional-legg · KazeYamu / b64b9b5 + 工作树"
+      "label": "ten-dimensional-legg · KazeYamu / a2b6813"
     }
   },
   "model": {
@@ -68,10 +68,10 @@
           {
             "rootId": "firmware",
             "path": "application/robot_def.h",
-            "line": 212,
-            "endLine": 227,
+            "line": 209,
+            "endLine": 224,
             "symbol": "Chassis_Ctrl_Cmd_s",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "a2b6813"
           }
         ],
         "metadata": {
@@ -357,7 +357,7 @@
         "sceneId": "root",
         "id": "guide",
         "label": "从这里读图",
-        "description": "### 当前源码 · KazeYamu / b64b9b5 · 2026-11-20\n\n从 **遥控 → 单板消息 → 底盘闭环 → 电机协议** 顺着箭头走。闭环块下钻可查观测、LQR、接地、自起和登阶。点卡片上的源码条目可查相对路径、符号和行号。\n\n遥控接入含当前未提交的 robot_cmd.c、robot_def.h、VT‑02 与 Windows 工具。任务周期按代码的 osDelay 标出。节点「源码已实现」指源码可追溯，验证状态见对应说明板。",
+        "description": "### 当前源码 · KazeYamu / a2b6813 · 2026-11-23\n\n从 **遥控 → 单板消息 → 底盘闭环 → 电机协议** 顺着箭头走。闭环块下钻可查观测、LQR、接地、自起和登阶。点卡片上的源码条目可查相对路径、符号和行号。\n\n底盘代码已分区整理（2026-11-23）：chassis.c 为调度骨架，恢复状态机、台阶动作、摩擦前馈、共享工具各有独立模块文件；yaw 观测为 IMU 世界航向 + 陀螺Z零偏标定（同日换源，剪刀腿根因已由 sigma_th 0.12 增益定版根治）。遥控接入、robot_def.h 与 VT‑02 均已提交入库。任务周期按代码的 osDelay 标出。节点「源码已实现」指源码可追溯，验证状态见对应说明板。",
         "kind": "annotation",
         "status": "implemented",
         "sourceRefs": [],
@@ -377,9 +377,9 @@
             "rootId": "firmware",
             "path": "application/robot_def.h",
             "line": 28,
-            "endLine": 65,
-            "symbol": "当前默认 SBUS",
-            "revision": "c2da24e + 台架工作区"
+            "endLine": 62,
+            "symbol": "当前默认 SBUS 与编译选项",
+            "revision": "a2b6813"
           },
           {
             "rootId": "firmware",
@@ -651,9 +651,9 @@
             "rootId": "firmware",
             "path": "application/robot_def.h",
             "line": 28,
-            "endLine": 65,
+            "endLine": 62,
             "symbol": "编译选项",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "a2b6813"
           }
         ],
         "metadata": {
@@ -708,9 +708,9 @@
             "rootId": "firmware",
             "path": "application/robot_def.h",
             "line": 19,
-            "endLine": 75,
+            "endLine": 72,
             "symbol": "编译选择",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "a2b6813"
           },
           {
             "rootId": "firmware",
@@ -1443,10 +1443,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/LQR.c",
-            "line": 64,
-            "endLine": 152,
+            "line": 98,
+            "endLine": 168,
             "symbol": "LQR_calc",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "a2b6813"
           }
         ],
         "metadata": {
@@ -2854,10 +2854,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/LQR.c",
-            "line": 56,
-            "endLine": 99,
+            "line": 106,
+            "endLine": 114,
             "symbol": "六组 K 与迟滞",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "a2b6813"
           }
         ],
         "metadata": {
@@ -2880,18 +2880,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/LQR.c",
-            "line": 101,
-            "endLine": 111,
+            "line": 116,
+            "endLine": 126,
             "symbol": "x[0..9]",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "a2b6813"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/LQR.c",
-            "line": 76,
+            "line": 91,
+            "endLine": 95,
             "symbol": "位置软死区",
-            "revision": "2026-11-21 合并工作区",
-            "endLine": 85
+            "revision": "a2b6813"
           }
         ],
         "metadata": {
@@ -2914,10 +2914,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/LQR.c",
-            "line": 113,
-            "endLine": 148,
+            "line": 129,
+            "endLine": 158,
             "symbol": "first_col / K 计算",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "a2b6813"
           }
         ],
         "metadata": {
@@ -2943,18 +2943,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/LQR.c",
-            "line": 70,
-            "endLine": 75,
-            "symbol": "悬空增益",
-            "revision": "2026-11-21 合并工作区"
+            "line": 89,
+            "endLine": 150,
+            "symbol": "悬空增益(air_tp_max 与空侧行)",
+            "revision": "a2b6813"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/LQR.c",
-            "line": 116,
-            "endLine": 137,
+            "line": 133,
+            "endLine": 151,
             "symbol": "逐侧悬空/登阶分支",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "a2b6813"
           }
         ],
         "metadata": {
@@ -2977,10 +2977,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/LQR.c",
-            "line": 113,
-            "endLine": 153,
+            "line": 129,
+            "endLine": 163,
             "symbol": "逐行选择 / 输出赋值",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "a2b6813"
           }
         ],
         "metadata": {
@@ -3871,10 +3871,10 @@
           {
             "rootId": "firmware",
             "path": "application/robot_def.h",
-            "line": 72,
-            "endLine": 75,
+            "line": 69,
+            "endLine": 72,
             "symbol": "VISION_USE_VCP",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "a2b6813"
           },
           {
             "rootId": "firmware",
@@ -4337,10 +4337,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/LQR.c",
-            "line": 1,
-            "endLine": 66,
+            "line": 28,
+            "endLine": 90,
             "symbol": "K_l015 … K_l040",
-            "revision": "2026-11-21 合并工作区"
+            "revision": "a2b6813"
           }
         ],
         "metadata": {
@@ -14248,8 +14248,8 @@
     "nodes": {
       "command": {
         "position": {
-          "x": 24,
-          "y": 42
+          "x": -32.47278546810803,
+          "y": 59.0098751409964
         },
         "width": 278,
         "appearance": {
@@ -14332,8 +14332,8 @@
       },
       "plant": {
         "position": {
-          "x": 1070,
-          "y": 644
+          "x": 1082.8318194876972,
+          "y": 645.1665290443361
         },
         "width": 278,
         "appearance": {
@@ -14356,8 +14356,8 @@
       },
       "guide": {
         "position": {
-          "x": 367,
-          "y": 1182
+          "x": 377.88632009023775,
+          "y": 1224.9620158387827
         },
         "width": 981,
         "height": 218,
@@ -14791,8 +14791,8 @@
       },
       "grf": {
         "position": {
-          "x": 693,
-          "y": 1100
+          "x": 696.9685026785006,
+          "y": 1169.0519466059106
         },
         "width": 278,
         "appearance": {
@@ -16190,8 +16190,8 @@
       },
       "bench-friction": {
         "position": {
-          "x": 710,
-          "y": 1182
+          "x": 726.6677112497025,
+          "y": 1471.7006955305442
         },
         "width": 278
       }
@@ -20638,9 +20638,9 @@
     "scenes": {
       "root": {
         "viewport": {
-          "x": -745.1511365339825,
-          "y": 9.99016364145416,
-          "zoom": 1.9999999999999998
+          "x": 328.94378886868185,
+          "y": -436.86505209464235,
+          "zoom": 0.9258746933972553
         }
       },
       "command-path": {
@@ -20666,9 +20666,9 @@
       },
       "chassis-cycle": {
         "viewport": {
-          "x": -218.8352766763528,
-          "y": -711.3243450814766,
-          "zoom": 1.4697344802811743
+          "x": -791.0844850090352,
+          "y": -324.5771470919108,
+          "zoom": 1.2599210344716505
         }
       },
       "observe-path": {
@@ -20736,9 +20736,9 @@
       },
       "plant-path": {
         "viewport": {
-          "x": 28,
-          "y": 25,
-          "zoom": 0.5930807248764415
+          "x": -1019.1392742110988,
+          "y": -401.16160435305324,
+          "zoom": 1.7433424459050768
         }
       },
       "service-path": {
@@ -20750,9 +20750,9 @@
       },
       "build-path": {
         "viewport": {
-          "x": 28,
-          "y": 25,
-          "zoom": 0.6036892118501956
+          "x": -867.4488241142874,
+          "y": 247.7476605329623,
+          "zoom": 1.5212015284523461
         }
       }
     }
