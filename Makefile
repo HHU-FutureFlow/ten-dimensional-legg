@@ -158,6 +158,7 @@ application/chassis/chassis.c \
 application/chassis/chassis_friction.c \
 application/chassis/chassis_utils.c \
 application/chassis/chassis_step_leg.c \
+application/chassis/chassis_recovery.c \
 application/chassis/LQR.c \
 application/chassis/grf_observer.c \
 application/chassis/step_collision.c \
