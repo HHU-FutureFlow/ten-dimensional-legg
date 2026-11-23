@@ -69,3 +69,6 @@ __pycache__/
 
 # EmberProbe capture dumps
 .workbuddy_*.ndjson
+
+# Agent working memory (local-only; AGENTS.md keeps the paths as handover entries)
+.agents/memory/
