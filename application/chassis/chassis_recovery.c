@@ -42,7 +42,7 @@ extern volatile LegFrictionPlan_s plan_l, plan_r;
 
 /* ===== 可调参数定义（ep 在线整定, 符号名不得改动） ===== */
 /* ---- 段速率/位形目标(核心可调) ---- */
-volatile float rec_l_rise      = 0.25f;   /* 站立/行驶腿长 m(唯一真源, 偏航模型系数联动) */
+volatile float rec_l_rise      = 0.25f;   /* 站立/行驶腿长 m,唯一真源 */
 volatile float rec_extend_rate = 0.0002f; /* 态1 腿长目标速率 m/tick = 20cm/s @1kHz */
 volatile float rec_chase_align = 0.12f;    /* 态2 对齐追赶超前量 rad(PD恒力=kp*ahead, 0.12→6N·m) */
 volatile float rec_chase_push  = 0.25f;    /* 态3 蹬地追赶超前量 rad(0.25→12.5N·m 顶升力) */

@@ -59,6 +59,13 @@ extern volatile float leg_kv_vel;   /* N/(m/s), 原 100 */
 extern volatile float roll_kp;      /* N/rad, 原 100 */
 extern volatile float roll_kd;      /* N/(rad/s), 原 10 */
 
+/* 陀螺Z零偏（2026-11-23 恢复 27ea99e,IMU yaw 回归主源）:
+ * 零力态两段式自动标定——前 2s 固定窗口均值,之后 EMA(τ≈10s) 跟踪温漂;
+ * |Gyro[2]|<0.05 rad/s 门限拒绝搬车污染。从 yaw/dyaw 中扣除,ep 可读写。
+ * 静止漂移实测 -2.5°/min(QEKF 强制 GyroBias[2]=0,Z 轴不可观测)。 */
+extern volatile float gyro_z_bias;        /* rad/s,预期 -0.0007 量级 */
+extern volatile uint8_t gyro_z_calib_stage; /* 0=未开始 1=快采中 2=EMA跟踪 */
+
 /* 电机反馈量调试映射:在 EP 全局符号里搜 chassis_dbg 即可
  * leg_*  : [0]r_front [1]r_behind [2]l_front [3]l_behind
  * wheel_*: [0]l_wheel [1]r_wheel

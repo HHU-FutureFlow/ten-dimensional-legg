@@ -38,19 +38,19 @@ static Chassis_Ctrl_Cmd_s chassis_cmd_recv;
 #define RC_DRIVE_ACTIVE_VX 0.02f /* m/s, |vx|低于此视为松杆→定点 */
 #define STEP_COLLISION_WINDOW_MS 15000u /* SW1 单次检测窗口，修改源码后重新编译 */
 
-/* ===== 模型一致 yaw（2026-10-31 剪刀腿根因修复）=====
- * model_lagrange.py 的偏航状态 ψ = [Δ轮位移 + l·(θ_l−θ_r)]/(2Rl)，是"差动里程
- * 计偏航"（原地搓地旋转模型不可见）。固件此前喂 IMU 世界航向，语义分裂：
- * LQR 以为在修"腿别剪开"，实际被要求锁世界航向 → 无限剪刀循环。
- * 固件轮编码器值含 R·θ 项（s_code = x_wheel + R·θ，见 lqr_v2/design.py），展开：
- *   ψ  = (r_x − l_x)/(2Rl) + (R+l)/(2Rl)·(θ_l − θ_r)
- *   ψ̇ = (r_dx − l_dx)/(2Rl) + (R+l)/(2Rl)·(dθ_l − dθ_r)
- * 静止时不漂（无积分无陀螺），代价：站立不再锁世界航向，比赛需要时另加 IMU 外环。 */
-#define TRACK_HALF_WIDTH  (0.24f)                 /* 半轮距 m,= params.py R_L */
+/* ===== 偏航观测来源（2026-11-23 回换 IMU 世界航向 + 陀螺Z零偏标定）=====
+ * 历史脉络: 早期喂 IMU 世界航向,与"修剪刀腿"语义冲突——差动 Tp 扭髋回正 yaw,
+ * 轮胎搓地摩擦使回正收敛不了,钉死目标=持续掰剪刀(无限剪刀循环)。
+ * 2026-10-31 改里程计模型 yaw 并退役零偏补丁(2a44475 弃 27ea99e)。
+ * 剪刀腿真根因=承重髋静摩擦死区+K θ 增益不足,已由 sigma_th 0.12 定版消除
+ * (e9f0732) —— 语义冲突不再成立,换回 IMU。
+ * 漂移对策: QEKF 强制 GyroBias[2]=0(Z 轴不可观测),静止实测 -2.5°/min 匀速漂,
+ * 靠零力态两段式零偏标定扣除(见 ChassisZeroForceEdge 与本文件观测段),
+ * yaw 用增量积分在增量域逐拍扣漂移,跨 ±180° wrap 不丢。
+ * 慢跟随(YAW_FOLLOW_TAU)不恢复: 漂移已直接扣除,yaw_target 保持冻结/锚定
+ * 语义,比赛锁世界航向直接可用;需要时另加外环。 */
+#define TRACK_HALF_WIDTH  (0.24f)                 /* 半轮距 m,= params.py R_L(轮速合成用) */
 #define WHEEL_RADIUS      (0.06f)                 /* 驱动轮半径 m,= params.py R_W */
-#define YAW_COEF_WHEEL    (1.0f / (2.0f * TRACK_HALF_WIDTH))                            /* 2.083, 与腿长无关(design.py Cq 推导) */
-/* YAW_COEF_LEG 已删除: 腿角项系数 (R+l)/(2R_L) 含腿长, 改为 ChassisTask 内
- * 用 rec_l_rise 现算联动, 防止改站立腿长时忘同步偏航模型(2026-11-05)。 */
 
 /* ===== 腿长刚度 + Roll 补偿（2026-11-01 加强,原为宏 800/100/100/10）=====
  * 加强依据: 右倾1.3°的静态偏移 = 腿长下垂差(6.5N/800≈8mm→1.0°) + roll补偿过弱
@@ -61,6 +61,13 @@ volatile float leg_kp_pos = 1600.0f;    /* N/m, 腿长位置刚度 */
 volatile float leg_kv_vel = 200.0f;     /* N/(m/s), 腿长轴向阻尼 */
 volatile float roll_kp    = 400.0f;     /* N/rad, roll 补偿刚度 */
 volatile float roll_kd    = 20.0f;      /* N/(rad/s), roll 补偿阻尼 */
+
+/* ===== 陀螺Z零偏（2026-11-23 恢复 27ea99e 方案,IMU yaw 回归主源）=====
+ * 零力态两段式自动标定(见 ChassisZeroForceEdge): 前 2s 固定窗口均值快速收敛,
+ * 之后慢 EMA(τ≈10s) 跟踪温度漂移; |Gyro[2]|<0.05 rad/s 门限拒绝搬车污染。
+ * 从控制用的 yaw/dyaw 中扣除(见 ChassisTask 观测段),ep 可读写。 */
+volatile float gyro_z_bias = 0.0f;       /* rad/s,陀螺Z零偏,静止漂移实测 -2.5°/min≈-0.0007 */
+volatile uint8_t gyro_z_calib_stage = 0; /* 0=未开始 1=快采中 2=EMA跟踪,ep 可观测 */
 
 /* ===== 恢复状态机/翻倒保护参数与实现见 chassis_recovery.c/h =====
  * 主流程引用其共享量: prone_rec_state / rec2_ramp / cur_l,r / rec_tht_l,r /
@@ -278,6 +285,12 @@ static uint8_t last_wheel_block_mask = 0; /* 两侧恢复轮控前重锚里程�
 static uint8_t drive_last = 0; /* 行驶模式锁存,零力恢复时置0强制重新锚定 */
 static uint8_t standing_last = 0; /* 站立测试模式锁存,进入沿锚定 yaw */
 static uint8_t lock_last = 0;     /* 锁定模式锁存,进入沿冻结 s/yaw 目标 */
+/* 陀螺Z零偏标定状态 + 去零偏 yaw 积分状态(2026-11-23 恢复 27ea99e) */
+static float bias_ema = 0.0f;      /* 标定内部 EMA 值(ep 读 gyro_z_bias 即可) */
+static uint16_t calib_cnt = 0;     /* 快采窗口已采拍数 */
+static float calib_acc = 0.0f;     /* 快采窗口累加值 */
+static float yaw_ctrl = 0.0f;      /* 去零偏后的 yaw(rad),喂给 LQR */
+static float yaw_raw_prev = 0.0f;  /* 上一拍 raw yaw(rad),做增量 */
 
 /* ===== 零力急停沿处理 =====
  * 进入沿: 停电机 + 清各模块锁存/锚定; 恢复沿: 使能电机 + 清模式锁存。
@@ -306,6 +319,7 @@ static uint8_t ChassisZeroForceEdge(void)
             position_integral = 0.0f;
 #endif
             last_wheel_block_mask = 0;
+            gyro_z_calib_stage = 0; /* 零力进入沿:重启快采窗口 */
             Recovery_NotifyZeroForceEnter();
         }
         else
@@ -323,12 +337,46 @@ static uint8_t ChassisZeroForceEdge(void)
             drive_last = 0;
             standing_last = 0;
             lock_last = 0;
+            /* 使能沿:去零偏 yaw 积分对齐当前 IMU yaw(此时车刚被摆正) */
+            yaw_ctrl = chassis_IMU_data->Yaw * DEGREE_2_RAD;
+            yaw_raw_prev = yaw_ctrl;
             Recovery_NotifyZeroForceExit();
         }
         zero_force_last = zero_force;
     }
     if (zero_force)
     {
+        /* 零力态 = 标定窗口,两段式(2026-11-23 恢复 27ea99e):
+         * stage1: 前 2000 拍(2s) 固定窗口均值,快速收敛(噪声压 ~√2000 倍),
+         *         恰好用掉上电后电机未使能的空窗;
+         * stage2: 完成后切慢 EMA(τ≈10s) 跟踪温度漂移。
+         * |Gyro[2]|<0.05 rad/s 门限拒绝搬车/晃动污染;stage1 未完成期间
+         * gyro_z_bias 保持旧值,新均值算完才覆盖。 */
+        const float gz = chassis_IMU_data->Gyro[2];
+        if (fabsf(gz) < 0.05f)
+        {
+            if (gyro_z_calib_stage == 0)
+            {
+                gyro_z_calib_stage = 1;
+                calib_cnt = 0;
+                calib_acc = 0.0f;
+            }
+            if (gyro_z_calib_stage == 1)
+            {
+                calib_acc += gz;
+                if (++calib_cnt >= 2000u)
+                {
+                    bias_ema = calib_acc / 2000.0f;
+                    gyro_z_bias = bias_ema;
+                    gyro_z_calib_stage = 2;
+                }
+            }
+            else if (gyro_z_calib_stage == 2)
+            {
+                bias_ema += 0.0001f * (gz - bias_ema); /* τ≈10s */
+                gyro_z_bias = bias_ema;
+            }
+        }
         for (unsigned i = 0; i < 4; ++i)
             chassis_dbg.joint_T_base[i] = chassis_dbg.fric_ff[i] =
                 chassis_dbg.joint_T_cmd[i] = chassis_dbg.joint_ref_speed[i] = 0.0f;
@@ -340,11 +388,11 @@ static uint8_t ChassisZeroForceEdge(void)
     return 0;
 }
 
-/* ===== 挡位斜坡 + 模型一致 yaw 重构 + 遥控目标生成 =====
+/* ===== 挡位斜坡 + 遥控目标生成 =====
  * 挡位: cmd 腿长目标斜坡跟踪(轮离地暂停换挡);
- * yaw: 用里程计+腿角差重构差动里程计偏航模型(见文件头部说明);
+ * yaw: 观测为 IMU 世界航向(零偏已扣,见文件头部说明);
  * 目标: 站立测试全零基线 / 行驶控速+航向积分 / 锁定进入沿冻结位姿;
- * 卷绕保护: yaw_target 与实测 ψ 取同分支防 2π 跳变。 */
+ * 卷绕保护: yaw_target 与实测 yaw 取同分支防 2π 跳变。 */
 static void ChassisCommandTargets(uint8_t protected_air_at_start,
                                   uint8_t *drive_out, float *turn_speed_out)
 {
@@ -366,14 +414,6 @@ static void ChassisCommandTargets(uint8_t protected_air_at_start,
             switch_length_step = leg_len_cmd_ramp - previous_switch_length;
         }
     }
-    /* 变腿长时 yaw 模型系数跟随当前生效目标(上一拍值, 慢变斜坡无妨)联动,
-     * 防 2026-11-05"改站立腿长忘同步偏航模型"同坑。 */
-    float yaw_coef_leg = (WHEEL_RADIUS + ten_targets.l_leg_length_target) / (2.0f * TRACK_HALF_WIDTH);
-    ten_balance_observe.yaw = YAW_COEF_WHEEL * (r_wheel.r_x - l_wheel.l_x)
-                            + yaw_coef_leg * (ten_balance_observe.l_theta - ten_balance_observe.r_theta);
-    ten_balance_observe.dyaw = YAW_COEF_WHEEL * (r_wheel.r_dx - l_wheel.l_dx)
-                             + yaw_coef_leg * (ten_balance_observe.l_dtheta - ten_balance_observe.r_dtheta);
-
     /* 轮使能沿重锚定 s/yaw 已并入态5 进入沿(直接写目标, 不再走请求标志)。 */
 
     /* ===== 遥控目标生成(cmd层意图 → LQR目标) =====
@@ -388,8 +428,8 @@ static void ChassisCommandTargets(uint8_t protected_air_at_start,
     if (chassis_cmd_recv.chassis_mode == CHASSIS_STANDING_TEST)
     {
         /* 站立调试基线: 除 yaw 外全零(腿长0.25m=rec_l_rise已在上方设置)。
-         * yaw_target 进入沿锚定当前 ψ 后冻结——里程计 ψ 会随推车/弧线漂移累计
-         * 差动轮里程,若硬编码 0 会产生常值 yaw 误差 → 常值差动 Tp → 单腿被压死。
+         * yaw_target 进入沿锚定当前实测后冻结——硬编码 0 会对非零上电朝向
+         * 产生常值 yaw 误差 → 常值差动 Tp → 单腿被压死(2026-10-31 实锤)。
          * drive_last 置0,退出本模式后按进入沿重新锚定/冻结。 */
         if (!standing_last)
             ten_targets.yaw_target = ten_balance_observe.yaw;
@@ -630,6 +670,17 @@ void ChassisTask()
     l_wheel_control(l_wheel_angle,l_wheel_w,&l_wheel);
     BalanceObserve(&ten_balance_observe);
 
+    /* 陀螺Z零偏修正(2026-11-23 恢复 27ea99e):零力态标定的 gyro_z_bias 从
+     * yaw/dyaw 中扣除。yaw 用增量积分(wrap 处理跨 ±180°),使能沿对齐;
+     * dyaw 直接减。放在 BalanceObserve 后,后续所有消费者拿到去偏值。 */
+    {
+        const float yaw_raw = chassis_IMU_data->Yaw * DEGREE_2_RAD;
+        yaw_ctrl += rec_wrap_pi(yaw_raw - yaw_raw_prev) - gyro_z_bias * CHASSIS_TICK_S;
+        yaw_raw_prev = yaw_raw;
+        ten_balance_observe.yaw = yaw_ctrl;
+        ten_balance_observe.dyaw = chassis_IMU_data->Gyro[2] - gyro_z_bias;
+    }
+
     /* GRF 观测器（T1）: 反馈力矩反推腿力 + IMU 竖直加速度,输出 ep 可读 grf_dbg */
     GRF_Update(r_front_8009_motor->measure.torque, r_behind_8009_motor->measure.torque,
                l_front_8009_motor->measure.torque, l_behind_8009_motor->measure.torque,
@@ -650,7 +701,7 @@ void ChassisTask()
      * 由下方 prone_rec_state 统一状态机替代(态5 LQR 斜坡接管补钳位)。
      * 腿长目标改由各态自写: 态1~4 PD 段按段目标, 态5/6 恒 rec_l_rise。 */
 
-    /* ===== 挡位斜坡 + 模型一致 yaw 重构 + 遥控目标生成 =====
+    /* ===== 挡位斜坡 + 遥控目标生成 =====
      * 实现(含注释依据)见上方 ChassisCommandTargets; drive/turn_speed 供
      * 台阶开窗判定与轮输出合成共用。 */
     uint8_t drive = 0;
