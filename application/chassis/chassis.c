@@ -276,32 +276,24 @@ static void ChassisLevelLegs(uint8_t active, four_control_data *control)
 }
 #endif
 
-void ChassisTask()
-{
-    ChassisDbgUpdate();
-    /* 使能帧只在 DMMotorInit/DMMotorEnable 里发一次。原来在这里每 5ms 发两帧
-     * DM_CMD_MOTOR_MODE，既占 CAN 带宽又打断 MIT 帧时序，已移除。 */
-    SetPowerLimit(1000000.0f);   /* @Todo 接裁判系统后换成真实底盘功率 */
-
-    /* ===== 接收 cmd 层指令 + 零力急停路径 =====
-     * 边沿触发: Stop/Enable 只置标志,电机输出任务持续按标志发零/正常帧。 */
-    SubGetMessage(chassis_cmd_sub, (void *)&chassis_cmd_recv);
-    static uint32_t last_step_request;
-    static uint32_t step_window_start_ms;
-    static uint8_t step_window_active;
-    /* 急停、自起期间的请求也要消费，禁止恢复正常后重放旧下拨。 */
-    const uint8_t new_step_request =
-        chassis_cmd_recv.step_window_request != last_step_request;
-    last_step_request = chassis_cmd_recv.step_window_request;
-
+/* ===== 文件级任务状态（原 ChassisTask 内 static, 提为文件级供分区函数共用; 原名不变）===== */
+static uint32_t last_step_request;
+static uint32_t step_window_start_ms;
+static uint8_t  step_window_active;
 #if WHEELLEG_JUMP_ENABLE || WHEELLEG_BALANCE_POSITION_HOLD
-    static float position_integral;
+static float position_integral;
 #endif
-    static uint8_t zero_force_last = 0;
-    static uint8_t last_wheel_block_mask = 0; /* 两侧恢复轮控前重锚里程参考 */
-    static uint8_t drive_last = 0; /* 行驶模式锁存,零力恢复时置0强制重新锚定 */
-    static uint8_t standing_last = 0; /* 站立测试模式锁存,进入沿锚定 yaw */
-    static uint8_t lock_last = 0;     /* 锁定模式锁存,进入沿冻结 s/yaw 目标 */
+static uint8_t zero_force_last = 0;
+static uint8_t last_wheel_block_mask = 0; /* 两侧恢复轮控前重锚里程参考 */
+static uint8_t drive_last = 0; /* 行驶模式锁存,零力恢复时置0强制重新锚定 */
+static uint8_t standing_last = 0; /* 站立测试模式锁存,进入沿锚定 yaw */
+static uint8_t lock_last = 0;     /* 锁定模式锁存,进入沿冻结 s/yaw 目标 */
+
+/* ===== 零力急停沿处理 =====
+ * 进入沿: 停电机 + 清各模块锁存/锚定; 恢复沿: 使能电机 + 清模式锁存。
+ * 返回 1 = 当前拍处于零力(调用方任务早退, 调试量已清零)。 */
+static uint8_t ChassisZeroForceEdge(void)
+{
     uint8_t zero_force = (chassis_cmd_recv.chassis_mode == CHASSIS_ZERO_FORCE);
     if (zero_force != zero_force_last)
     {
@@ -353,59 +345,19 @@ void ChassisTask()
         for (unsigned i = 0; i < 2; ++i)
             chassis_dbg.wheel_T_base[i] = chassis_dbg.wheel_ff[i] =
                 chassis_dbg.Tw_cmd[i] = chassis_dbg.wheel_ref_speed[i] = 0.0f;
-        return; /* 电机停机标志已生效 */
+        return 1;
     }
+    return 0;
+}
 
-    /* 恢复状态机共享计划量(文件级, 见文件头部): 每拍清零后各段写入 */
-    plan_l = plan_r = (LegFrictionPlan_s){0};
-    const float prev_len_l = ten_targets.l_leg_length_target;
-    const float prev_len_r = ten_targets.r_leg_length_target;
-
-    /* 用多圈展开后的连续位置；β 的整圈歧义在 *_Alpha_beta_calculate 里归一化 */
-    float r_theta_f=r_front_8009_motor->measure.total_position;
-    float r_theta_b=r_behind_8009_motor->measure.total_position;
-    float r_speed_f=r_front_8009_motor->measure.velocity;
-    float r_speed_b=r_behind_8009_motor->measure.velocity;
-    float r_wheel_angle=r_wheel_motor->measure.total_angle;
-    float r_wheel_w=r_wheel_motor->measure.speed_aps;
-
-
-    float l_theta_f= -l_front_8009_motor->measure.total_position;
-    float l_theta_b=-l_behind_8009_motor->measure.total_position;
-    float l_speed_f=-l_front_8009_motor->measure.velocity;
-    float l_speed_b=-l_behind_8009_motor->measure.velocity;
-    float l_wheel_angle= -l_wheel_motor->measure.total_angle;
-    float l_wheel_w= -l_wheel_motor->measure.speed_aps;
-
-    r_Alpha_beta_calculate(r_theta_f,r_theta_b,r_speed_f,r_speed_b,&r_leg);
-    l_Alpha_beta_calculate(l_theta_f,l_theta_b,l_speed_f,l_speed_b,&l_leg);
-    r_wheel_control(r_wheel_angle,r_wheel_w,&r_wheel);
-    l_wheel_control(l_wheel_angle,l_wheel_w,&l_wheel);
-    BalanceObserve(&ten_balance_observe);
-
-    /* GRF 观测器（T1）: 反馈力矩反推腿力 + IMU 竖直加速度,输出 ep 可读 grf_dbg */
-    GRF_Update(r_front_8009_motor->measure.torque, r_behind_8009_motor->measure.torque,
-               l_front_8009_motor->measure.torque, l_behind_8009_motor->measure.torque,
-               0.001f);
-
-    const uint8_t protected_air_at_start = ChassisProtectedAirMask(StepLegMotion_ActiveMask());
-
-    /* ===== T3 机体系摆角 θ_body（2026-11-05, 函数级作用域）=====
-     * balance.c:96 里 l_theta = θ_body − Pitch·rad, 加回来即得"腿相对机体竖直"
-     * 的角 = 纯编码器运动学量, 与 IMU 姿态无关, 翻倒/欧拉角折返时依然有效
-     * （数学恒等抵消, 非近似）。T3 监控、态4/5、输出闸、dbg 填充共用。 */
-    float pitch_rad = chassis_IMU_data->Pitch * 0.01745329252f;
-    float roll_rad  = chassis_IMU_data->Roll * 0.01745329252f;  /* S0 判定/dF_roll 共用 */
-    float l_theta_body = ten_balance_observe.l_theta + pitch_rad;
-    float r_theta_body = ten_balance_observe.r_theta + pitch_rad;
-
-    /* v2 FOLD/DONE 状态机已删除(2026-11-09): 低腿长+大φ误差下 DONE 切换 Tp 无钳位猛甩,
-     * 由下方 prone_rec_state 统一状态机替代(态5 LQR 斜坡接管补钳位)。
-     * 腿长目标改由各态自写: 态1~4 PD 段按段目标, 态5/6 恒 rec_l_rise。 */
-
-    /* 模型一致 yaw：用里程计+腿角差重构 model_lagrange.py 的 ψ（见文件头部说明）。
-     * BalanceObserve 里的 IMU yaw/dyaw 在此被整体替换；IMU 仅保留 φ/roll 用途。
-     * 腿角项系数 (R+l)/(2R_L) 随当前生效腿长目标联动(遥控三挡切换不丢同步)。 */
+/* ===== 挡位斜坡 + 模型一致 yaw 重构 + 遥控目标生成 =====
+ * 挡位: cmd 腿长目标斜坡跟踪(轮离地暂停换挡);
+ * yaw: 用里程计+腿角差重构差动里程计偏航模型(见文件头部说明);
+ * 目标: 站立测试全零基线 / 行驶控速+航向积分 / 锁定进入沿冻结位姿;
+ * 卷绕保护: yaw_target 与实测 ψ 取同分支防 2π 跳变。 */
+static void ChassisCommandTargets(uint8_t protected_air_at_start,
+                                  uint8_t *drive_out, float *turn_speed_out)
+{
     /* 遥控挡位腿长斜坡跟踪(2026-11-15): 目标<0.1=未配置(保持 rec_l_rise, 兼容
      * NONE 编译/未接遥控), 其余 clamp [0.15,0.40](K 带全覆盖上界, 高于机械底)。
      * 任一轮离地时暂停更换挡位目标，承载恢复后由现有腿长斜坡继续跟挡。 */
@@ -442,7 +394,6 @@ void ChassisTask()
      * 上电首拍锁定即冻结,此时 s≈0,yaw≈0,与站立调试的硬编码基线等价。
      * 恢复流程态1~4/态6: 本块目标随后被状态机覆盖(模式锁存照常更新); 态5 起本块
      * 接管(θ 收零/重锚完成前状态机仍短暂写)。腿长目标全程由状态机置位。 */
-    /* drive 在函数级作用域: 目标生成分支共用 */
     uint8_t drive = (chassis_cmd_recv.chassis_mode == CHASSIS_WHEELLEG_DRIVE);
     float turn_speed = 0.0f;
     if (chassis_cmd_recv.chassis_mode == CHASSIS_STANDING_TEST)
@@ -513,6 +464,209 @@ void ChassisTask()
     float yaw_ref_err = ten_targets.yaw_target - ten_balance_observe.yaw;
     yaw_ref_err -= 2.0f * PI * roundf(yaw_ref_err / (2.0f * PI));
     ten_targets.yaw_target = ten_balance_observe.yaw + yaw_ref_err;
+
+    *drive_out = drive;
+    *turn_speed_out = turn_speed;
+}
+
+/* ===== 输出覆盖（2026-11-09 重做, 2026-11-14 增态6）=====
+ * PD 段不经 LQR（手册第九章: 自救期强制不经 LQR/VMC 平衡通道）:
+ * 态1~4/态6: Tp = rec_pd PD(cur-θ_body 连续目标), Tw 硬清零, 腿长力仍走腿长环。
+ * 态7  : Tp = prot PD(追赶式目标), Tw 硬清零。
+ * 态5  : LQR 正常输出乘 rec2_ramp 0->1 渐入(斜坡补 v2 缺的 Tp 钳位),
+ *        腿长环/roll 补偿不乘(腿长目标经斜坡无跳变)。
+ * LQR_calc 无内部状态, 覆盖安全。 */
+static void ChassisApplyRecoveryOverride(float l_theta_body, float r_theta_body)
+{
+    if ((prone_rec_state == PRS_FLIP && prot_armed) ||
+        (prone_rec_state >= PRS_EXTEND && prone_rec_state <= PRS_PUSH) ||
+        prone_rec_state == PRS_QUICK)
+    {
+        float l_tb, r_tb, kp, kd, tp_max;
+        if (prone_rec_state == PRS_FLIP)
+        {   /* 翻身: 追赶式目标(态7 内已写 ten_targets), prot 组增益 */
+            l_tb = ten_targets.l_theta_target;
+            r_tb = ten_targets.r_theta_target;
+            kp = prot_kp_theta; kd = prot_kd_theta; tp_max = prot_tp_max;
+        }
+        else
+        {   /* 伸腿保持/对齐/蹬地/折叠快转: 连续目标角, rec 组增益 */
+            l_tb = cur_l;
+            r_tb = cur_r;
+            kp = rec_pd_kp; kd = rec_pd_kd; tp_max = rec_pd_tp_max;
+        }
+        /* 阻尼项用机体系角速度(l_dtheta+Gyro[0], balance.c 里 l_dtheta 已减 Gyro[0]):
+         * 位置项 θ_body 是体系量, 阻尼必须同坐标系 —— 顶升时 pitch 快速变化,
+         * 世界系阻尼会引入额外力矩分量(外部审查实锤)。
+         * 位置误差必须 wrap: 目标 cur/追赶目标是连续累计角(可超 ±π), θ_body 是
+         * atan2 主值(±π 折返) —— 裸相减在动腿过顶(对齐翻越/折叠蹬地必经)后误差
+         * 跳 2π: PD 钳位饱和 + 追逐目标在折返空间符号反转 → 腿持续飞转直到段
+         * 超时(设计规范本就要求 wrap(目标−实测), 此前实现遗漏)。 */
+        float lt4 = kp * rec_wrap_pi(l_tb - l_theta_body)
+                    - kd * (ten_balance_observe.l_dtheta + chassis_IMU_data->Gyro[0]);
+        float rt4 = kp * rec_wrap_pi(r_tb - r_theta_body)
+                    - kd * (ten_balance_observe.r_dtheta + chassis_IMU_data->Gyro[0]);
+        LIMIT_MIN_MAX(lt4, -tp_max, tp_max);
+        LIMIT_MIN_MAX(rt4, -tp_max, tp_max);
+        four_control_datas.l_Tp = lt4;
+        four_control_datas.r_Tp = rt4;
+        four_control_datas.l_Tw = 0.0f;
+        four_control_datas.r_Tw = 0.0f;
+    }
+    else if (prone_rec_state == PRS_LQR_RAMP)
+    {   /* 交接混合: PD 支撑力随 ramp 退出、LQR 输出随 ramp 进入 —— 力连续不塌。
+         * 15:3x 实测教训: 纯 ramp(Tp*=乘子)会在交接瞬间撤掉撑住重力矩的 PD 力,
+         * LQR 又从 0 起步 → 机体塌。PD 用 cur/end(停在 θ_end) 与态3 同组增益;
+         * 误差同样必须 wrap —— 过顶对齐后 cur 带 2π 累计偏移, 裸相减会让
+         * "PD 支撑力"变成满钳位飞转力(见上方覆盖块注释)。 */
+        float lt4 = rec_pd_kp * rec_wrap_pi(cur_l - l_theta_body)
+                    - rec_pd_kd * (ten_balance_observe.l_dtheta + chassis_IMU_data->Gyro[0]);
+        float rt4 = rec_pd_kp * rec_wrap_pi(cur_r - r_theta_body)
+                    - rec_pd_kd * (ten_balance_observe.r_dtheta + chassis_IMU_data->Gyro[0]);
+        LIMIT_MIN_MAX(lt4, -rec_pd_tp_max, rec_pd_tp_max);
+        LIMIT_MIN_MAX(rt4, -rec_pd_tp_max, rec_pd_tp_max);
+        four_control_datas.l_Tp = lt4 * (1.0f - rec2_ramp)
+                                  + four_control_datas.l_Tp * rec2_ramp;
+        four_control_datas.r_Tp = rt4 * (1.0f - rec2_ramp)
+                                  + four_control_datas.r_Tp * rec2_ramp;
+        four_control_datas.l_Tw *= rec2_ramp;
+        four_control_datas.r_Tw *= rec2_ramp;
+    }
+}
+
+/* ===== 电机输出: 关节摩擦前馈叠加 + 轮速合成 ===== */
+static void ChassisMotorOutput(uint8_t out_gate, const ten_balance_target *control_targets,
+                               uint8_t drive, float turn_speed,
+                               uint8_t wheel_block_l, uint8_t wheel_block_r)
+{
+    /* 基础力矩来自反馈控制，摩擦前馈在电机轴独立叠加。 */
+    float joint_speed[4] = {0};
+    if (!out_gate)
+    {
+        JointReferenceSpeed(plan_r, control_targets->r_leg_length_target,
+                            R_LEG_A, R_LEG_B, 1.0f, &joint_speed[0]);
+        JointReferenceSpeed(plan_l, control_targets->l_leg_length_target,
+                            L_LEG_A, L_LEG_B, -1.0f, &joint_speed[2]);
+    }
+
+    DMMotorInstance *const joint_motor[4] = {
+        r_front_8009_motor, r_behind_8009_motor, l_front_8009_motor, l_behind_8009_motor,
+    };
+    const float joint_base[4] = {
+        r_leg_motor_torques.r_Tf, r_leg_motor_torques.r_Tb,
+        l_leg_motor_torques.l_Tf, l_leg_motor_torques.l_Tb,
+    };
+    for (unsigned i = 0; i < 4; ++i)
+    {
+        chassis_dbg.joint_ref_speed[i] = joint_speed[i];
+        const float command = MotorTorqueWithFriction(joint_base[i], joint_speed[i],
+                                                      joint_friction_nm[i], FRICTION_TANH_W0,
+                                                      DM_T_MAX, out_gate, &chassis_dbg.joint_T_base[i],
+                                                      &chassis_dbg.fric_ff[i]);
+        chassis_dbg.joint_T_cmd[i] = command;
+        DMMotorSetCtrlMode(joint_motor[i], DM_CTRL_TORQUE);
+        DMMotorSetRef(joint_motor[i], command);
+    }
+
+    /* 左转为正，右轮参考速度较大。左右轮同用前进为正的坐标合成后限幅。 */
+    const uint8_t wheel_gate = (prone_rec_state <= PRS_PUSH ||
+                                prone_rec_state == PRS_FLIP ||
+                                prone_rec_state == PRS_QUICK);
+    const uint8_t wheel_blocked[2] = {wheel_gate || wheel_block_l, wheel_gate || wheel_block_r};
+    float wheel_speed[2] = {0};
+    if (drive && !wheel_gate)
+    {
+        const float turn = TRACK_HALF_WIDTH * turn_speed;
+        const float scale = prone_rec_state == PRS_LQR_RAMP ? rec2_ramp : 1.0f;
+        wheel_speed[0] = scale * (ten_targets.ds_target - turn);
+        wheel_speed[1] = scale * (ten_targets.ds_target + turn);
+    }
+
+    DJIMotorInstance *const wheel_motor[2] = {l_wheel_motor, r_wheel_motor};
+    const float wheel_base[2] = {four_control_datas.l_Tw, four_control_datas.r_Tw};
+    const float wheel_direction[2] = {l_wheel_direction, 1.0f};
+    for (unsigned i = 0; i < 2; ++i)
+    {
+        chassis_dbg.wheel_ref_speed[i] = wheel_blocked[i] || !isfinite(wheel_speed[i]) ? 0.0f : wheel_speed[i];
+        const float command = MotorTorqueWithFriction(wheel_base[i], wheel_speed[i],
+                                                      wheel_friction_nm[i], WHEEL_FRICTION_TANH_V0,
+                                                      WHEEL_T_MAX, wheel_blocked[i], &chassis_dbg.wheel_T_base[i],
+                                                      &chassis_dbg.wheel_ff[i]);
+        chassis_dbg.Tw_cmd[i] = command;
+        DJIMotorSetRef(wheel_motor[i], wheel_direction[i] * WHEEL_T_PER_RAW * command);
+    }
+}
+
+void ChassisTask()
+{
+    ChassisDbgUpdate();
+    /* 使能帧只在 DMMotorInit/DMMotorEnable 里发一次。原来在这里每 5ms 发两帧
+     * DM_CMD_MOTOR_MODE，既占 CAN 带宽又打断 MIT 帧时序，已移除。 */
+    SetPowerLimit(1000000.0f);   /* @Todo 接裁判系统后换成真实底盘功率 */
+
+    /* ===== 接收 cmd 层指令 + 零力急停路径 =====
+     * 边沿触发: Stop/Enable 只置标志,电机输出任务持续按标志发零/正常帧。 */
+    SubGetMessage(chassis_cmd_sub, (void *)&chassis_cmd_recv);
+    /* 急停、自起期间的请求也要消费，禁止恢复正常后重放旧下拨。 */
+    const uint8_t new_step_request =
+        chassis_cmd_recv.step_window_request != last_step_request;
+    last_step_request = chassis_cmd_recv.step_window_request;
+    if (ChassisZeroForceEdge())
+        return;
+
+    /* 恢复状态机共享计划量(文件级, 见文件头部): 每拍清零后各段写入 */
+    plan_l = plan_r = (LegFrictionPlan_s){0};
+    const float prev_len_l = ten_targets.l_leg_length_target;
+    const float prev_len_r = ten_targets.r_leg_length_target;
+
+    /* 用多圈展开后的连续位置；β 的整圈歧义在 *_Alpha_beta_calculate 里归一化 */
+    float r_theta_f=r_front_8009_motor->measure.total_position;
+    float r_theta_b=r_behind_8009_motor->measure.total_position;
+    float r_speed_f=r_front_8009_motor->measure.velocity;
+    float r_speed_b=r_behind_8009_motor->measure.velocity;
+    float r_wheel_angle=r_wheel_motor->measure.total_angle;
+    float r_wheel_w=r_wheel_motor->measure.speed_aps;
+
+
+    float l_theta_f= -l_front_8009_motor->measure.total_position;
+    float l_theta_b=-l_behind_8009_motor->measure.total_position;
+    float l_speed_f=-l_front_8009_motor->measure.velocity;
+    float l_speed_b=-l_behind_8009_motor->measure.velocity;
+    float l_wheel_angle= -l_wheel_motor->measure.total_angle;
+    float l_wheel_w= -l_wheel_motor->measure.speed_aps;
+
+    r_Alpha_beta_calculate(r_theta_f,r_theta_b,r_speed_f,r_speed_b,&r_leg);
+    l_Alpha_beta_calculate(l_theta_f,l_theta_b,l_speed_f,l_speed_b,&l_leg);
+    r_wheel_control(r_wheel_angle,r_wheel_w,&r_wheel);
+    l_wheel_control(l_wheel_angle,l_wheel_w,&l_wheel);
+    BalanceObserve(&ten_balance_observe);
+
+    /* GRF 观测器（T1）: 反馈力矩反推腿力 + IMU 竖直加速度,输出 ep 可读 grf_dbg */
+    GRF_Update(r_front_8009_motor->measure.torque, r_behind_8009_motor->measure.torque,
+               l_front_8009_motor->measure.torque, l_behind_8009_motor->measure.torque,
+               0.001f);
+
+    const uint8_t protected_air_at_start = ChassisProtectedAirMask(StepLegMotion_ActiveMask());
+
+    /* ===== T3 机体系摆角 θ_body（2026-11-05, 函数级作用域）=====
+     * balance.c:96 里 l_theta = θ_body − Pitch·rad, 加回来即得"腿相对机体竖直"
+     * 的角 = 纯编码器运动学量, 与 IMU 姿态无关, 翻倒/欧拉角折返时依然有效
+     * （数学恒等抵消, 非近似）。T3 监控、态4/5、输出闸、dbg 填充共用。 */
+    float pitch_rad = chassis_IMU_data->Pitch * 0.01745329252f;
+    float roll_rad  = chassis_IMU_data->Roll * 0.01745329252f;  /* S0 判定/dF_roll 共用 */
+    float l_theta_body = ten_balance_observe.l_theta + pitch_rad;
+    float r_theta_body = ten_balance_observe.r_theta + pitch_rad;
+
+    /* v2 FOLD/DONE 状态机已删除(2026-11-09): 低腿长+大φ误差下 DONE 切换 Tp 无钳位猛甩,
+     * 由下方 prone_rec_state 统一状态机替代(态5 LQR 斜坡接管补钳位)。
+     * 腿长目标改由各态自写: 态1~4 PD 段按段目标, 态5/6 恒 rec_l_rise。 */
+
+    /* ===== 挡位斜坡 + 模型一致 yaw 重构 + 遥控目标生成 =====
+     * 实现(含注释依据)见上方 ChassisCommandTargets; drive/turn_speed 供
+     * 台阶开窗判定与轮输出合成共用。 */
+    uint8_t drive = 0;
+    float turn_speed = 0.0f;
+    ChassisCommandTargets(protected_air_at_start, &drive, &turn_speed);
 
     /* ===== 统一恢复状态机（S0 判定/态7 翻身/态1~5 恢复流程/T3 监控, 实现见 chassis_recovery.c）=====
      * 覆盖上面所有目标生成; 返回 1 = 本拍状态段切换(供下方清恢复段遗留前馈)。
@@ -705,67 +859,8 @@ void ChassisTask()
     }
 #endif
 
-    /* ===== 输出覆盖（2026-11-09 重做, 2026-11-14 增态6）=====
-     * PD 段不经 LQR（手册第九章: 自救期强制不经 LQR/VMC 平衡通道）:
-     * 态1~4/态6: Tp = rec_pd PD(cur-θ_body 连续目标), Tw 硬清零, 腿长力仍走下方腿长环。
-     * 态7  : Tp = prot PD(追赶式目标), Tw 硬清零。
-     * 态5  : LQR 正常输出乘 rec2_ramp 0->1 渐入(斜坡补 v2 缺的 Tp 钳位),
-     *        腿长环/roll 补偿不乘(腿长目标经斜坡无跳变)。
-     * LQR_calc 无内部状态, 覆盖安全。 */
-    if ((prone_rec_state == PRS_FLIP && prot_armed) ||
-        (prone_rec_state >= PRS_EXTEND && prone_rec_state <= PRS_PUSH) ||
-        prone_rec_state == PRS_QUICK)
-    {
-        float l_tb, r_tb, kp, kd, tp_max;
-        if (prone_rec_state == PRS_FLIP)
-        {   /* 翻身: 追赶式目标(态7 内已写 ten_targets), prot 组增益 */
-            l_tb = ten_targets.l_theta_target;
-            r_tb = ten_targets.r_theta_target;
-            kp = prot_kp_theta; kd = prot_kd_theta; tp_max = prot_tp_max;
-        }
-        else
-        {   /* 伸腿保持/对齐/蹬地/折叠快转: 连续目标角, rec 组增益 */
-            l_tb = cur_l;
-            r_tb = cur_r;
-            kp = rec_pd_kp; kd = rec_pd_kd; tp_max = rec_pd_tp_max;
-        }
-        /* 阻尼项用机体系角速度(l_dtheta+Gyro[0], balance.c 里 l_dtheta 已减 Gyro[0]):
-         * 位置项 θ_body 是体系量, 阻尼必须同坐标系 —— 顶升时 pitch 快速变化,
-         * 世界系阻尼会引入额外力矩分量(外部审查实锤)。
-         * 位置误差必须 wrap: 目标 cur/追赶目标是连续累计角(可超 ±π), θ_body 是
-         * atan2 主值(±π 折返) —— 裸相减在动腿过顶(对齐翻越/折叠蹬地必经)后误差
-         * 跳 2π: PD 钳位饱和 + 追逐目标在折返空间符号反转 → 腿持续飞转直到段
-         * 超时(设计规范本就要求 wrap(目标−实测), 此前实现遗漏)。 */
-        float lt4 = kp * rec_wrap_pi(l_tb - l_theta_body)
-                    - kd * (ten_balance_observe.l_dtheta + chassis_IMU_data->Gyro[0]);
-        float rt4 = kp * rec_wrap_pi(r_tb - r_theta_body)
-                    - kd * (ten_balance_observe.r_dtheta + chassis_IMU_data->Gyro[0]);
-        LIMIT_MIN_MAX(lt4, -tp_max, tp_max);
-        LIMIT_MIN_MAX(rt4, -tp_max, tp_max);
-        four_control_datas.l_Tp = lt4;
-        four_control_datas.r_Tp = rt4;
-        four_control_datas.l_Tw = 0.0f;
-        four_control_datas.r_Tw = 0.0f;
-    }
-    else if (prone_rec_state == PRS_LQR_RAMP)
-    {   /* 交接混合: PD 支撑力随 ramp 退出、LQR 输出随 ramp 进入 —— 力连续不塌。
-         * 15:3x 实测教训: 纯 ramp(Tp*=乘子)会在交接瞬间撤掉撑住重力矩的 PD 力,
-         * LQR 又从 0 起步 → 机体塌。PD 用 cur/end(停在 θ_end) 与态3 同组增益;
-         * 误差同样必须 wrap —— 过顶对齐后 cur 带 2π 累计偏移, 裸相减会让
-         * "PD 支撑力"变成满钳位飞转力(见上方覆盖块注释)。 */
-        float lt4 = rec_pd_kp * rec_wrap_pi(cur_l - l_theta_body)
-                    - rec_pd_kd * (ten_balance_observe.l_dtheta + chassis_IMU_data->Gyro[0]);
-        float rt4 = rec_pd_kp * rec_wrap_pi(cur_r - r_theta_body)
-                    - rec_pd_kd * (ten_balance_observe.r_dtheta + chassis_IMU_data->Gyro[0]);
-        LIMIT_MIN_MAX(lt4, -rec_pd_tp_max, rec_pd_tp_max);
-        LIMIT_MIN_MAX(rt4, -rec_pd_tp_max, rec_pd_tp_max);
-        four_control_datas.l_Tp = lt4 * (1.0f - rec2_ramp)
-                                  + four_control_datas.l_Tp * rec2_ramp;
-        four_control_datas.r_Tp = rt4 * (1.0f - rec2_ramp)
-                                  + four_control_datas.r_Tp * rec2_ramp;
-        four_control_datas.l_Tw *= rec2_ramp;
-        four_control_datas.r_Tw *= rec2_ramp;
-    }
+    /* ===== 输出覆盖: PD 段不经 LQR / 态5 斜坡混合（实现见上方 ChassisApplyRecoveryOverride）===== */
+    ChassisApplyRecoveryOverride(l_theta_body, r_theta_body);
 
     /* 虚拟腿长力 = 重力前馈 + 腿长 PID；VMC 内部再按修正后的 J^T 映射。 */
     float l_dot = LegVelEst(ten_balance_observe.l_leg_length, &l_legvel, 0);
@@ -882,61 +977,8 @@ void ChassisTask()
     VMC_Calc(&four_control_datas, &r_leg_motor_torques, &r_leg);
     l_VMC_Calc(&four_control_datas, &l_leg_motor_torques, &l_leg);
 
-    /* 基础力矩来自反馈控制，摩擦前馈在电机轴独立叠加。 */
-    float joint_speed[4] = {0};
-    if (!out_gate)
-    {
-        JointReferenceSpeed(plan_r, control_targets->r_leg_length_target,
-                            R_LEG_A, R_LEG_B, 1.0f, &joint_speed[0]);
-        JointReferenceSpeed(plan_l, control_targets->l_leg_length_target,
-                            L_LEG_A, L_LEG_B, -1.0f, &joint_speed[2]);
-    }
-
-    DMMotorInstance *const joint_motor[4] = {
-        r_front_8009_motor, r_behind_8009_motor, l_front_8009_motor, l_behind_8009_motor,
-    };
-    const float joint_base[4] = {
-        r_leg_motor_torques.r_Tf, r_leg_motor_torques.r_Tb,
-        l_leg_motor_torques.l_Tf, l_leg_motor_torques.l_Tb,
-    };
-    for (unsigned i = 0; i < 4; ++i)
-    {
-        chassis_dbg.joint_ref_speed[i] = joint_speed[i];
-        const float command = MotorTorqueWithFriction(joint_base[i], joint_speed[i],
-                                                      joint_friction_nm[i], FRICTION_TANH_W0,
-                                                      DM_T_MAX, out_gate, &chassis_dbg.joint_T_base[i],
-                                                      &chassis_dbg.fric_ff[i]);
-        chassis_dbg.joint_T_cmd[i] = command;
-        DMMotorSetCtrlMode(joint_motor[i], DM_CTRL_TORQUE);
-        DMMotorSetRef(joint_motor[i], command);
-    }
-
-    /* 左转为正，右轮参考速度较大。左右轮同用前进为正的坐标合成后限幅。 */
-    const uint8_t wheel_gate = (prone_rec_state <= PRS_PUSH ||
-                                prone_rec_state == PRS_FLIP ||
-                                prone_rec_state == PRS_QUICK);
-    const uint8_t wheel_blocked[2] = {wheel_gate || wheel_block_l, wheel_gate || wheel_block_r};
-    float wheel_speed[2] = {0};
-    if (drive && !wheel_gate)
-    {
-        const float turn = TRACK_HALF_WIDTH * turn_speed;
-        const float scale = prone_rec_state == PRS_LQR_RAMP ? rec2_ramp : 1.0f;
-        wheel_speed[0] = scale * (ten_targets.ds_target - turn);
-        wheel_speed[1] = scale * (ten_targets.ds_target + turn);
-    }
-
-    DJIMotorInstance *const wheel_motor[2] = {l_wheel_motor, r_wheel_motor};
-    const float wheel_base[2] = {four_control_datas.l_Tw, four_control_datas.r_Tw};
-    const float wheel_direction[2] = {l_wheel_direction, 1.0f};
-    for (unsigned i = 0; i < 2; ++i)
-    {
-        chassis_dbg.wheel_ref_speed[i] = wheel_blocked[i] || !isfinite(wheel_speed[i]) ? 0.0f : wheel_speed[i];
-        const float command = MotorTorqueWithFriction(wheel_base[i], wheel_speed[i],
-                                                      wheel_friction_nm[i], WHEEL_FRICTION_TANH_V0,
-                                                      WHEEL_T_MAX, wheel_blocked[i], &chassis_dbg.wheel_T_base[i],
-                                                      &chassis_dbg.wheel_ff[i]);
-        chassis_dbg.Tw_cmd[i] = command;
-        DJIMotorSetRef(wheel_motor[i], wheel_direction[i] * WHEEL_T_PER_RAW * command);
-    }
+    /* ===== 电机输出: 关节摩擦前馈叠加 + 轮速合成（实现见上方 ChassisMotorOutput）===== */
+    ChassisMotorOutput(out_gate, control_targets, drive, turn_speed,
+                       wheel_block_l, wheel_block_r);
 
 }
