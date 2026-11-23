@@ -147,6 +147,7 @@ modules/referee/rm_referee.c \
 modules/referee/referee_UI.c \
 modules/referee/referee_task.c \
 modules/remote/remote_control.c \
+modules/remote/vt_link.c \
 modules/super_cap/super_cap.c \
 modules/can_comm/can_comm.c \
 modules/message_center/message_center.c \
@@ -154,7 +155,10 @@ modules/daemon/daemon.c \
 modules/alarm/buzzer.c \
 application/gimbal/gimbal.c \
 application/chassis/chassis.c \
+application/chassis/chassis_friction.c \
 application/chassis/LQR.c \
+application/chassis/grf_observer.c \
+application/chassis/step_collision.c \
 application/chassis/VMC.c \
 application/chassis/balance.c \
 application/shoot/shoot.c \

@@ -17,6 +17,7 @@
 #include "VMC.h"
 #include "grf_observer.h"
 #include "step_collision.h"
+#include "chassis_friction.h"
 #include "stm32f4xx_hal.h"
 #include <math.h>
 
@@ -48,20 +49,6 @@ static Chassis_Ctrl_Cmd_s chassis_cmd_recv;
 #define YAW_COEF_WHEEL    (1.0f / (2.0f * TRACK_HALF_WIDTH))                            /* 2.083, 与腿长无关(design.py Cq 推导) */
 /* YAW_COEF_LEG 已删除: 腿角项系数 (R+l)/(2R_L) 含腿长, 改为 ChassisTask 内
  * 用 rec_l_rise 现算联动, 防止改站立腿长时忘同步偏航模型(2026-11-05)。 */
-
-/* 2026-11-22 台架等效运动摩擦候选，N·m。带载运行待验证。
- * 关节顺序与 chassis_dbg 一致（右大腿、右小腿、左大腿、左小腿），轮为左、右。 */
-static const float joint_friction_nm[4] = {1.42f, 0.70f, 0.89f, 0.94f};
-static const float wheel_friction_nm[2] = {0.04f, 0.10f};
-#define FRICTION_TANH_W0       (0.15f) /* rad/s, 电机轴 */
-#define WHEEL_FRICTION_TANH_V0 (0.03f) /* m/s, 轮缘 */
-#define CHASSIS_TICK_S         (0.001f)
-
-typedef struct
-{
-    float length_step; /* 本拍计划的腿长增量，m */
-    float theta_speed; /* 本拍主动参考摆速，rad/s */
-} LegFrictionPlan_s;
 
 /* ===== 腿长刚度 + Roll 补偿（2026-11-01 加强,原为宏 800/100/100/10）=====
  * 加强依据: 右倾1.3°的静态偏移 = 腿长下垂差(6.5N/800≈8mm→1.0°) + roll补偿过弱
@@ -381,32 +368,6 @@ static float rec_wrap_pi(float a)
     return a - 2.0f * PI * roundf(a / (2.0f * PI));
 }
 
-/* 虚拟腿长的逆解与台架一致。关节在机体系为 θ∓β/2，
- * 左腿按 VMC 输出约定换回电机轴坐标。重锚和静止拍的长度增量为零。 */
-static void JointReferenceSpeed(LegFrictionPlan_s plan, float length, float thigh, float shin,
-                                float motor_sign, float speed[2])
-{
-    float half_beta_speed = 0.0f;
-    if (plan.length_step != 0.0f)
-    {
-        const float before = length - plan.length_step;
-        if (!isfinite(length) || !isfinite(before) || before <= 0.0f || length <= 0.0f)
-            return;
-
-        float cos_before = (before * before + thigh * thigh - shin * shin) / (2.0f * before * thigh);
-        float cos_now = (length * length + thigh * thigh - shin * shin) / (2.0f * length * thigh);
-        if (fabsf(cos_before) > 1.0f || fabsf(cos_now) > 1.0f)
-            return;
-
-        half_beta_speed = (acosf(cos_now) - acosf(cos_before)) / CHASSIS_TICK_S;
-    }
-    if (!isfinite(plan.theta_speed))
-        return;
-
-    speed[0] = motor_sign * (plan.theta_speed - half_beta_speed);
-    speed[1] = motor_sign * (plan.theta_speed + half_beta_speed);
-}
-
 /* 追赶目标由反馈位置重写。按到终点的剩余角与现有超前量给参考速度，
  * 到位带内取消摆动前馈，PD 实测速度项继续制动。 */
 static float ChaseReferenceSpeed(float remaining, float tolerance, float ahead)
@@ -416,31 +377,6 @@ static float ChaseReferenceSpeed(float remaining, float tolerance, float ahead)
 
     const float travel = fmaxf(0.0f, fabsf(remaining) - tolerance);
     return copysignf(rec_done_zero_rate * fminf(1.0f, travel / ahead), remaining);
-}
-
-static float MotorTorqueWithFriction(float base, float speed, float friction, float smoothing,
-                                     float limit, uint8_t blocked, volatile float *base_dbg,
-                                     volatile float *ff_dbg)
-{
-    if (blocked || !isfinite(base))
-    {
-        *base_dbg = *ff_dbg = 0.0f;
-        return 0.0f;
-    }
-
-    *base_dbg = base;
-    float limited_base = base;
-    LIMIT_MIN_MAX(limited_base, -limit, limit);
-    if (!isfinite(speed) || speed == 0.0f)
-    {
-        *ff_dbg = 0.0f;
-        return limited_base;
-    }
-
-    float command = base + friction * tanhf(speed / smoothing);
-    LIMIT_MIN_MAX(command, -limit, limit);
-    *ff_dbg = command - limited_base;
-    return command;
 }
 
 typedef enum
