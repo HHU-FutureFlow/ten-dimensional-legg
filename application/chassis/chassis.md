@@ -1,7 +1,23 @@
 # chassis
 
-
 @Todo 使用条件编译，选择麦轮(全向轮),舵轮,平衡底盘
+
+## 模块结构（2026-11-23 分区整理）
+
+| 文件 | 职责 |
+| --- | --- |
+| `chassis.c/.h` | 主任务调度骨架：cmd 接收与零力急停沿、挡位斜坡+模型一致 yaw 重构+遥控目标生成、观测组装、台阶开窗协调、LQR 调用、恢复段输出覆盖、腿长力+roll 补偿、电机输出；`ChassisTask()` 为按序调度 |
+| `chassis_recovery.c/.h` | 统一恢复状态机 S0~S7（起立/折叠快转/翻身）+ T3 翻倒保护 + 全部 rec 前缀/prot 前缀可调参数；零力沿经 `Recovery_Notify*`、台阶接管经 `Recovery_StepTakeover` 接入 |
+| `chassis_step_leg.c/.h` | 接触式上台阶单腿动作状态机（后摆→收腿→回摆→就绪）与 STEP_LEG 容差宏 |
+| `chassis_friction.c/.h` | 关节/轮摩擦前馈：候选力矩表、tanh 模型宏、`JointReferenceSpeed`（腿长增量→关节参考速度）、`MotorTorqueWithFriction`（限幅合成） |
+| `chassis_utils.c/.h` | `rec_wrap_pi`（角度 wrap，static inline）、`LegVelEst`（500Hz 反馈分隔拍归一 Ldot 估计）、`ChaseReferenceSpeed`（追赶参考速度） |
+| `chassis_jump.c/.h` | 跳跃状态机（默认关闭，`WHEELLEG_JUMP_ENABLE`） |
+| `grf_observer.c/.h` | GRF 地面反力观测与接地/悬空判定 |
+| `step_collision.c/.h` | 台阶碰撞检测（SW1 开窗） |
+| `LQR/VMC/balance` | 十维状态反馈、虚拟力到关节力矩映射、腿部运动学观测 |
+
+各文件内部统一分区顺序：includes → 常量宏 → 可调参数（volatile，ep 在线整定）→ 类型定义 → 文件级状态 → 内部工具 → 对外接口；同区内多功能以横幅注释分节。EP 观测符号名在整理中保持不变。
+
 ## 工作流程
 
 首先进行初始化，`ChasissInit()`会被`RobotInit()`调用，进行裁判系统、底盘电机的初始化。如果为双板模式，则还会初始化IMU，并且将消息订阅者和发布者的初始化改为`CANComm`的初始化。
