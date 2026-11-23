@@ -110,3 +110,5 @@
 - 2026-11-22 Codex 登记普通模式全量摩擦前馈的编译和主机验证，基线 c2da24e，工程地图 revision 177。
 - 2026-11-22 Codex 归档全流程复测手册、代表性数据和离线工具，登记普通模式实车反馈及固件提交 a0bc68d。
 - 2026-11-23 WorkBuddy：chassis 应用分区整理（friction/utils/step_leg/recovery 四模块拆出+主文件调度骨架化），纯搬运零行为变化，每步独立提交（fe230f6/0a061f2/202f2f0/724c271），EP 符号经 nm 核对不变，待实车例行确认；功能状态表不受影响，折叠起立 TODO 引用同步到 chassis_recovery.c。
+- 2026-11-23 WorkBuddy：调试量瘦身（d458f8d），删 dbg_goal/dbg_cont 独立变量与 chassis_dbg 冗余字段（lqr_x/lqr_u/Fleg_cmd/Roll/prot/rec_state），EP 直读源量（cur_l/cont_l/ten_balance_observe/four_control_datas/chassis_IMU_data）。
+- 2026-11-23 WorkBuddy：工程地图同步——51 个节点的 chassis.c 源码定位重指 d458f8d（分区拆分后行号全部失效），状态机/台阶/摩擦/工具引用改指 chassis_recovery.c、chassis_step_leg.c、chassis_friction.c、chassis_utils.c；services/trace/debug-vars 的 ChassisDbgLqr 引用随函数删除移除。以 graph CLI 导入副本执行（基线 revision 177 导入，事务后 revision 1），dry-run 校验通过后导出同名 JSON；chassis.c 超界旧行号残留 0，chassis_jump.c/step_collision.c/grf_observer.c/LQR.c 等未动文件引用保留原样。

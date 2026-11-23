@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "projectId": "project_71e858ce-e5b7-4270-a711-44001f676b6b",
+  "projectId": "project_1c20792b-82d4-4cbe-8cf0-437e0c68705b",
   "title": "十维轮腿底盘 · 工程地图",
-  "revision": 177,
+  "revision": 1,
   "rootSceneId": "root",
   "sourceRoots": {
     "firmware": {
@@ -96,10 +96,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 531,
-            "endLine": 1758,
+            "line": 589,
+            "endLine": 984,
             "symbol": "ChassisTask",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -224,10 +224,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 276,
-            "endLine": 304,
-            "symbol": "ChassisDbgUpdate / ChassisDbgLqr",
-            "revision": "c2da24e + 台架工作区"
+            "line": 119,
+            "endLine": 137,
+            "symbol": "ChassisDbgUpdate",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -278,10 +278,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 306,
-            "endLine": 376,
+            "line": 212,
+            "endLine": 227,
             "symbol": "ChassisInit",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
@@ -804,10 +804,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 306,
-            "endLine": 377,
+            "line": 139,
+            "endLine": 211,
             "symbol": "ChassisActuatorsInit",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
@@ -1282,10 +1282,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 531,
-            "endLine": 619,
-            "symbol": "零力入口",
-            "revision": "c2da24e + 台架工作区"
+            "line": 282,
+            "endLine": 341,
+            "symbol": "零力急停沿(ChassisZeroForceEdge)",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -1319,10 +1319,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 623,
-            "endLine": 693,
-            "symbol": "反馈读入和 yaw 重构",
-            "revision": "c2da24e + 台架工作区"
+            "line": 620,
+            "endLine": 643,
+            "symbol": "反馈读入与连杆解算(含左右取号)",
+            "revision": "d458f8d"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 369,
+            "endLine": 376,
+            "symbol": "yaw/dyaw 重构(ChassisCommandTargets 内)",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -1354,10 +1362,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 647,
-            "endLine": 651,
-            "symbol": "观测调用",
-            "revision": "c2da24e + 台架工作区"
+            "line": 634,
+            "endLine": 638,
+            "symbol": "GRF_Update 调用",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -1384,18 +1392,34 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 675,
-            "endLine": 1477,
-            "symbol": "目标生成 / 恢复 / 触阶",
-            "revision": "c2da24e + 台架工作区"
+            "line": 343,
+            "endLine": 459,
+            "symbol": "遥控目标生成(ChassisCommandTargets)",
+            "revision": "d458f8d"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 181,
+            "endLine": 741,
+            "symbol": "统一恢复状态机(Recovery_Update)",
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1407,
-            "symbol": "跳跃输入和参考接入",
-            "revision": "c2da24e + 台架工作区",
-            "endLine": 1441
+            "line": 667,
+            "endLine": 723,
+            "symbol": "台阶开窗与触阶检测",
+            "revision": "d458f8d"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 752,
+            "endLine": 784,
+            "symbol": "ChassisTask 跳跃接入",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -1446,26 +1470,26 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1620,
-            "endLine": 1681,
-            "symbol": "恢复摆角 PD 和 LQR 交接",
-            "revision": "c2da24e + 普通模式前馈工作树"
+            "line": 461,
+            "endLine": 524,
+            "symbol": "恢复摆角 PD 和 LQR 交接(ChassisApplyRecoveryOverride)",
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1682,
-            "endLine": 1706,
-            "symbol": "实测腿速阻尼和轴向反馈",
-            "revision": "c2da24e + 普通模式前馈工作树"
+            "line": 850,
+            "endLine": 880,
+            "symbol": "实测腿速阻尼与腿长 PID",
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1707,
-            "endLine": 1793,
-            "symbol": "承重、跳跃、全零闸及差模",
-            "revision": "c2da24e + 普通模式前馈工作树"
+            "line": 881,
+            "endLine": 931,
+            "symbol": "承重前馈、跳跃腿力替换与差模",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -1489,10 +1513,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1791,
-            "endLine": 1851,
-            "symbol": "VMC、摩擦前馈与下发",
-            "revision": "c2da24e + 普通模式前馈工作树"
+            "line": 958,
+            "endLine": 984,
+            "symbol": "VMC 映射与电机输出",
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
@@ -1524,18 +1548,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 276,
-            "endLine": 304,
-            "symbol": "ChassisDbgUpdate / ChassisDbgLqr",
-            "revision": "c2da24e + 台架工作区"
+            "line": 119,
+            "endLine": 137,
+            "symbol": "ChassisDbgUpdate",
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1481,
-            "endLine": 1504,
-            "symbol": "原始 LQR 输出",
-            "revision": "c2da24e + 台架工作区"
+            "line": 827,
+            "endLine": 845,
+            "symbol": "LQR_calc 调用与输出(镜像已删,EP 直读 four_control_datas)",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -1590,10 +1614,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 623,
-            "endLine": 644,
+            "line": 620,
+            "endLine": 631,
             "symbol": "左右反馈取号",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -1727,17 +1751,17 @@
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
             "line": 41,
-            "endLine": 52,
+            "endLine": 53,
             "symbol": "偏航模型系数",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 687,
-            "endLine": 694,
-            "symbol": "yaw / dyaw 重建",
-            "revision": "c2da24e + 台架工作区"
+            "line": 369,
+            "endLine": 376,
+            "symbol": "yaw / dyaw 重建(ChassisCommandTargets 内)",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -1760,10 +1784,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 640,
-            "endLine": 694,
+            "line": 620,
+            "endLine": 656,
             "symbol": "ChassisTask 观测段",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -1958,10 +1982,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 669,
-            "endLine": 772,
-            "symbol": "挡位斜坡和行驶参考",
-            "revision": "c2da24e + 台架工作区"
+            "line": 343,
+            "endLine": 459,
+            "symbol": "挡位斜坡与行驶参考(ChassisCommandTargets)",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -1987,11 +2011,19 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 773,
-            "endLine": 1325,
-            "symbol": "统一恢复状态机及运行时监控",
-            "revision": "c2da24e + 台架工作区"
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 40,
+            "endLine": 105,
+            "symbol": "恢复与保护参数区(rec_*/prot_*)",
+            "revision": "d458f8d"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 181,
+            "endLine": 741,
+            "symbol": "统一恢复状态机及 T3 监控(Recovery_Update)",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2018,18 +2050,26 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1326,
-            "endLine": 1386,
-            "symbol": "检测窗口、两侧动作与同拍接管",
-            "revision": "c2da24e + 台架工作区"
+            "line": 667,
+            "endLine": 723,
+            "symbol": "检测窗口与同拍接管",
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 403,
-            "endLine": 498,
+            "path": "application/chassis/chassis_step_leg.c",
+            "line": 33,
+            "endLine": 95,
+            "symbol": "两侧动作(StepLegMotion_Update)",
+            "revision": "d458f8d"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis_step_leg.c",
+            "line": 33,
+            "endLine": 95,
             "symbol": "StepLegMotion_Update",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
@@ -2060,19 +2100,27 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 427,
-            "endLine": 439,
-            "symbol": "ActiveMask / ChassisProtectedAirMask",
-            "revision": "c2da24e + 台架工作区"
+            "path": "application/chassis/chassis_step_leg.c",
+            "line": 27,
+            "endLine": 32,
+            "symbol": "StepLegMotion_ActiveMask",
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1388,
-            "endLine": 1456,
-            "symbol": "受阻位与重锚",
-            "revision": "c2da24e + 台架工作区"
+            "line": 229,
+            "endLine": 244,
+            "symbol": "ChassisProtectedAirMask",
+            "revision": "d458f8d"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis.c",
+            "line": 738,
+            "endLine": 795,
+            "symbol": "轮受阻位与重锚",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2098,26 +2146,26 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1371,
-            "endLine": 1504,
-            "symbol": "接管、控制目标与掩码",
-            "revision": "c2da24e + 台架工作区"
+            "line": 690,
+            "endLine": 745,
+            "symbol": "台阶接管、控制目标与掩码",
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1686,
-            "endLine": 1748,
+            "line": 752,
+            "endLine": 795,
             "symbol": "动作相位与轮门控",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1407,
+            "line": 752,
+            "endLine": 786,
             "symbol": "跳跃参考与分侧掩码",
-            "revision": "c2da24e + 台架工作区",
-            "endLine": 1464
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2174,11 +2222,11 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 779,
-            "endLine": 832,
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 181,
+            "endLine": 244,
             "symbol": "有效观测驻留和四路分流",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2204,11 +2252,11 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 950,
-            "endLine": 994,
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 354,
+            "endLine": 400,
             "symbol": "PRS_EXTEND",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2233,11 +2281,11 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 995,
-            "endLine": 1042,
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 402,
+            "endLine": 448,
             "symbol": "PRS_ALIGN",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2262,11 +2310,11 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 1043,
-            "endLine": 1121,
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 450,
+            "endLine": 529,
             "symbol": "PRS_PUSH",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2291,11 +2339,11 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 1122,
-            "endLine": 1167,
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 531,
+            "endLine": 575,
             "symbol": "PRS_QUICK",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2320,19 +2368,19 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 1168,
-            "endLine": 1211,
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 577,
+            "endLine": 620,
             "symbol": "PRS_LQR_RAMP",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1547,
-            "endLine": 1566,
-            "symbol": "摆矩混合",
-            "revision": "c2da24e + 台架工作区"
+            "line": 505,
+            "endLine": 524,
+            "symbol": "摆矩混合(LQR 交接)",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2356,19 +2404,19 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 855,
-            "endLine": 920,
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 246,
+            "endLine": 325,
             "symbol": "PRS_FLIP",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 582,
-            "endLine": 585,
-            "symbol": "零力确认沿",
-            "revision": "c2da24e + 台架工作区"
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 134,
+            "endLine": 147,
+            "symbol": "零力确认沿(Recovery_NotifyZeroForceEnter)",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2393,19 +2441,19 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 1212,
-            "endLine": 1279,
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 621,
+            "endLine": 702,
             "symbol": "PRS_DONE",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1326,
-            "endLine": 1332,
+            "line": 669,
+            "endLine": 688,
             "symbol": "触阶许可",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2430,19 +2478,19 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 1171,
-            "endLine": 1280,
-            "symbol": "恢复参考写回",
-            "revision": "c2da24e + 台架工作区"
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 577,
+            "endLine": 702,
+            "symbol": "恢复参考写回(S4/S5)",
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1512,
-            "endLine": 1619,
-            "symbol": "下游使用阶段",
-            "revision": "c2da24e + 台架工作区"
+            "line": 827,
+            "endLine": 956,
+            "symbol": "恢复参考下游使用",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2464,19 +2512,19 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 180,
-            "endLine": 200,
-            "symbol": "默认配置",
-            "revision": "c2da24e + 台架工作区"
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 86,
+            "endLine": 105,
+            "symbol": "翻倒保护参数",
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 1294,
-            "endLine": 1325,
-            "symbol": "运行中翻倒判定",
-            "revision": "c2da24e + 台架工作区"
+            "path": "application/chassis/chassis_recovery.c",
+            "line": 715,
+            "endLine": 741,
+            "symbol": "运行中翻倒监控",
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2533,10 +2581,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1326,
-            "endLine": 1346,
+            "line": 667,
+            "endLine": 698,
             "symbol": "开窗条件",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2589,11 +2637,11 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 442,
-            "endLine": 491,
+            "path": "application/chassis/chassis_step_leg.c",
+            "line": 41,
+            "endLine": 62,
             "symbol": "StepLegMotion_Update 后摆",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2618,11 +2666,11 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 469,
-            "endLine": 479,
+            "path": "application/chassis/chassis_step_leg.c",
+            "line": 63,
+            "endLine": 76,
             "symbol": "后摆对准后收短",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2646,11 +2694,11 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 480,
-            "endLine": 496,
+            "path": "application/chassis/chassis_step_leg.c",
+            "line": 77,
+            "endLine": 86,
             "symbol": "回摆与准备位复核",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2674,11 +2722,11 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 481,
-            "endLine": 489,
+            "path": "application/chassis/chassis_step_leg.c",
+            "line": 77,
+            "endLine": 86,
             "symbol": "每拍复核准备位",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2703,10 +2751,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1359,
-            "endLine": 1457,
+            "line": 690,
+            "endLine": 745,
             "symbol": "双侧接管与受阻位重算",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2731,10 +2779,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1459,
-            "endLine": 1481,
+            "line": 798,
+            "endLine": 825,
             "symbol": "动作侧参考覆盖",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -2979,18 +3027,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1620,
-            "endLine": 1661,
+            "line": 468,
+            "endLine": 504,
             "symbol": "PD 替换",
-            "revision": "c2da24e + 普通模式前馈工作树"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1662,
-            "endLine": 1681,
+            "line": 505,
+            "endLine": 524,
             "symbol": "平衡接管保持分量",
-            "revision": "c2da24e + 普通模式前馈工作树"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -3013,10 +3061,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1512,
-            "endLine": 1566,
+            "line": 461,
+            "endLine": 524,
             "symbol": "纯 PD、混合和 LQR",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -3038,19 +3086,19 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 204,
-            "endLine": 231,
+            "path": "application/chassis/chassis_utils.c",
+            "line": 6,
+            "endLine": 27,
             "symbol": "LegVelEst",
-            "revision": "c2da24e + 普通模式前馈工作树"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1682,
-            "endLine": 1706,
+            "line": 850,
+            "endLine": 880,
             "symbol": "长度刚度与实测速度阻尼",
-            "revision": "c2da24e + 普通模式前馈工作树"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
@@ -3081,26 +3129,26 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1592,
-            "endLine": 1645,
+            "line": 881,
+            "endLine": 903,
             "symbol": "重力前馈与差动横滚",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.h",
-            "line": 36,
-            "endLine": 62,
-            "symbol": "腿力与横滚参数",
-            "revision": "2026-11-21 合并工作区"
+            "line": 37,
+            "endLine": 64,
+            "symbol": "腿力与横滚参数(LEG_GRAVITY_FF/腿长级联/Roll 补偿声明)",
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1628,
+            "line": 904,
+            "endLine": 918,
             "symbol": "跳跃轴向力替换",
-            "revision": "c2da24e + 台架工作区",
-            "endLine": 1637
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -3123,10 +3171,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1650,
-            "endLine": 1667,
+            "line": 937,
+            "endLine": 956,
             "symbol": "out_gate",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -3197,27 +3245,35 @@
         "sourceRefs": [
           {
             "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 55,
-            "endLine": 67,
-            "symbol": "各电机的独立系数",
-            "revision": "c2da24e + 普通模式前馈工作树"
+            "path": "application/chassis/chassis_friction.c",
+            "line": 7,
+            "endLine": 11,
+            "symbol": "摩擦系数表(joint_friction_nm/wheel_friction_nm)",
+            "revision": "d458f8d"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis_friction.c",
+            "line": 13,
+            "endLine": 34,
+            "symbol": "JointReferenceSpeed",
+            "revision": "d458f8d"
+          },
+          {
+            "rootId": "firmware",
+            "path": "application/chassis/chassis_utils.c",
+            "line": 30,
+            "endLine": 40,
+            "symbol": "ChaseReferenceSpeed",
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 389,
-            "endLine": 421,
-            "symbol": "JointReferenceSpeed / ChaseReferenceSpeed",
-            "revision": "c2da24e + 普通模式前馈工作树"
-          },
-          {
-            "rootId": "firmware",
-            "path": "application/chassis/chassis.c",
-            "line": 1797,
-            "endLine": 1823,
+            "line": 531,
+            "endLine": 560,
             "symbol": "四关节前馈与下发",
-            "revision": "c2da24e + 普通模式前馈工作树"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -3244,10 +3300,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1815,
-            "endLine": 1823,
+            "line": 551,
+            "endLine": 560,
             "symbol": "DMMotorSetCtrlMode / DMMotorSetRef",
-            "revision": "c2da24e + 普通模式前馈工作树"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -3270,10 +3326,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1826,
-            "endLine": 1851,
+            "line": 562,
+            "endLine": 587,
             "symbol": "轮门控、计划速度与下发",
-            "revision": "c2da24e + 普通模式前馈工作树"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
@@ -3307,10 +3363,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1841,
-            "endLine": 1851,
+            "line": 583,
+            "endLine": 585,
             "symbol": "DJIMotorSetRef",
-            "revision": "c2da24e + 普通模式前馈工作树"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
@@ -3381,10 +3437,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 306,
-            "endLine": 377,
+            "line": 139,
+            "endLine": 211,
             "symbol": "ChassisActuatorsInit",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -3425,10 +3481,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 306,
-            "endLine": 377,
+            "line": 139,
+            "endLine": 211,
             "symbol": "ChassisActuatorsInit",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           }
         ],
         "metadata": {
@@ -3597,10 +3653,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 308,
-            "endLine": 341,
+            "line": 141,
+            "endLine": 200,
             "symbol": "4 个关节实例",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
@@ -3631,10 +3687,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 343,
-            "endLine": 375,
+            "line": 203,
+            "endLine": 211,
             "symbol": "两轮 PowerControlInit",
-            "revision": "c2da24e + 台架工作区"
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
@@ -3765,10 +3821,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 276,
-            "endLine": 304,
-            "symbol": "ChassisDbgUpdate / ChassisDbgLqr",
-            "revision": "c2da24e + 台架工作区"
+            "line": 119,
+            "endLine": 137,
+            "symbol": "ChassisDbgUpdate",
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
@@ -4331,10 +4387,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1407,
+            "line": 752,
+            "endLine": 784,
             "symbol": "ChassisTask 跳跃接入",
-            "revision": "c2da24e + 台架工作区",
-            "endLine": 1441
+            "revision": "d458f8d"
           },
           {
             "rootId": "firmware",
