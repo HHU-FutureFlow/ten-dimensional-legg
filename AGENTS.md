@@ -35,6 +35,17 @@
 - 当前构建入口为 `scripts/project.ps1 -Action build`，详见 `PORTABLE_BUILD.md`。仅在获准固件修改后进行相应编译；纯 Markdown 协作文件检查内容、链接和差异即可。
 - 验证结论据实记录命令、结果及必要的产物信息；失败和未执行项目应明确标记，不能声称未实际完成的编译或实测。
 
+## 代码组织与存放规范
+
+适用范围：agent 进行的代码新增与修改。历史代码不要求回改；动到哪个文件，改动就按本节执行。
+
+1. **功能模块化**：单一功能（状态机/动作序列/纯算法/参数表）与主流程耦合混杂时，拆为独立 .c/.h 模块；主任务文件保持调度骨架（模式分发+调用序列），不堆实现细节。范本：chassis.c 1854→984 行，拆出 chassis_recovery / chassis_step_leg / chassis_friction / chassis_utils。
+2. **文件内分区顺序**：includes → 常量宏 → 可调参数 → 类型定义 → 文件级状态 → 内部工具（static 函数）→ 对外 API。区内多功能共存时用横幅注释分节。范本：chassis_recovery.c 参数区 rec_*/prot_*/挡位三节。
+3. **.h 与 .c 分工**：.h 收 #define 宏、struct/enum 类型、extern 参数声明（带默认值与依据注释）、static inline 纯函数、API 声明——打开 .h 即见该模块全部可调面；.c 留 volatile 参数定义（头文件多重定义是 C 硬约束）、static 状态、实现。
+4. **复用优先**：先查工程已有工具与算法（LIMIT_MIN_MAX、PI/PI2、DEGREE_2_RAD、controller.h 的 PID 等）再写新实现；确需手写控制律（如外部 D 源的状态反馈）时注释写明为何不用现成 PID，改进项登记 `.Doc/TODO.md`。
+5. **EP 符号红线**：volatile 参数是 ep 在线整定面，跨文件搬家不改名、不收进 struct；函数内 static 提为文件级允许。新调试量仅限"源量 EP 不可直读"的量（局部变量/函数中间量）；源量已全局的调试镜像不新加。范本：d458f8d 调试量瘦身。
+6. **构建与文档收尾**：新增 .c 在 Makefile 源列表显式追加；代码拆分/移动后核对工程地图 sourceRefs 行号（见下方工程地图同步节）；模块结构变化同步 `application/chassis/chassis.md`。
+
 ## 工程地图同步
 
 - Agent 在本工作区新增、修改或删除代码时，把工程地图同步纳入同一任务。方案中列明受影响的视图或待新增节点。代码改完后，按最终源码更新对应的模块、端口、信号连线、分支条件和源码定位。纯内部改动若经核对没有影响地图内容，在任务收尾说明核对结果即可。
@@ -63,7 +74,11 @@ Codex 在重要进展及收尾时及时更新当日日志；长期有效的决�
 
 ## 工程导航
 
-- `application/chassis/chassis.c`：底盘主控制、起立/自救状态机、输出门控。
+- `application/chassis/chassis.c`：底盘任务调度骨架、遥控目标生成、输出合成与门控。
+- `application/chassis/chassis_recovery.c`：统一起立/自救状态机（S0~S7）与翻倒保护。
+- `application/chassis/chassis_step_leg.c`：接触式上台阶抬腿动作。
+- `application/chassis/chassis_friction.c`：关节/轮摩擦前馈。
+- `application/chassis/chassis_utils.c`：角度 wrap、腿长速度估计等共享工具。
 - `application/chassis/balance.c`：腿部运动学及状态观测。
 - `application/chassis/LQR.c`：十维状态反馈、腿长分带 K 和悬空处理接口。
 - `application/chassis/VMC.c`：虚拟力到关节力矩映射。
