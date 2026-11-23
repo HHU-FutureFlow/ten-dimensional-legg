@@ -242,8 +242,12 @@ static uint8_t ChassisProtectedAirMask(uint8_t step_leg_mask)
     return GRF_GetAirMask() & normal_lqr_wheels;
 }
 
-#if WHEELLEG_JUMP_ENABLE || WHEELLEG_BALANCE_THETA_LEVEL
-/* 双腿受力拉开摆角差时，按支撑力和腿长增加差模纠偏刚度。 */
+#if WHEELLEG_JUMP_ENABLE
+/* 双腿受力拉开摆角差时，按支撑力和腿长增加差模纠偏刚度。
+ * 常态差模入口已删(2026-11-23): 剪刀腿根因=承重髋静摩擦死区,已由
+ * sigma_th 0.12 定版根治(e9f0732),旧 WHEELLEG_BALANCE_THETA_LEVEL 常态
+ * 试验选项一并移除;本函数现仅由跳跃相位经 jump_ref.level_legs 启用
+ * (蹲伏/蹬伸/落地)。 */
 volatile float theta_lvl_k = 15.0f;  /* N·m/rad */
 volatile float theta_lvl_db = 0.01f; /* rad */
 volatile float theta_lvl_max = 15.0f; /* N·m */
@@ -488,7 +492,7 @@ static void ChassisCommandTargets(uint8_t protected_air_at_start,
     standing_last = (chassis_cmd_recv.chassis_mode == CHASSIS_STANDING_TEST);
     lock_last = !drive && !standing_last;
 
-    /* yaw_target 卷绕保护：目标始终与实测 ψ 取同一分支，LQR 的 x[2] 限在 ±π 内，
+    /* yaw_target 卷绕保护：目标始终与实测 yaw 取同一分支，LQR 的 x[2] 限在 ±π 内，
      * 防止 wz 长时间积分与分支卷绕差 2π 时 Tp 猛跳。 */
     float yaw_ref_err = ten_targets.yaw_target - ten_balance_observe.yaw;
     yaw_ref_err -= 2.0f * PI * roundf(yaw_ref_err / (2.0f * PI));
@@ -788,8 +792,7 @@ void ChassisTask()
 
     const uint8_t wheel_block_mask = step_leg_mask | protected_air_mask;
     const uint8_t optional_balance = (WHEELLEG_BALANCE_POSITION_HOLD ||
-                                      WHEELLEG_BALANCE_LEG_VEL_HOLD ||
-                                      WHEELLEG_BALANCE_THETA_LEVEL) &&
+                                      WHEELLEG_BALANCE_LEG_VEL_HOLD) &&
                                       prone_rec_state == PRS_DONE && lift_top &&
                                       !wheel_block_mask;
     LQR_FeedbackOptions_s feedback = {
@@ -997,12 +1000,12 @@ void ChassisTask()
         four_control_datas.r_Tleg = 0.0f;
     }
 
-#if WHEELLEG_JUMP_ENABLE || WHEELLEG_BALANCE_THETA_LEVEL
-    uint8_t level_legs = WHEELLEG_BALANCE_THETA_LEVEL && optional_balance;
 #if WHEELLEG_JUMP_ENABLE
+    /* 常态差模入口已删(THETA_LEVEL,2026-11-23): level_legs 常态恒 0,
+     * 仅跳跃相位经 jump_ref.level_legs 置 1(蹲伏/蹬伸/落地)。 */
+    uint8_t level_legs = 0;
     if (jump_ref.active)
         level_legs = jump_ref.level_legs;
-#endif
     ChassisLevelLegs(!out_gate && prone_rec_state == PRS_DONE && !step_leg_mask && level_legs,
                      &four_control_datas);
 #endif

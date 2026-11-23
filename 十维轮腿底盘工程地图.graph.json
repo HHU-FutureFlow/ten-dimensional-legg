@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "projectId": "project_1c20792b-82d4-4cbe-8cf0-437e0c68705b",
   "title": "十维轮腿底盘 · 工程地图",
-  "revision": 2,
+  "revision": 3,
   "rootSceneId": "root",
   "sourceRoots": {
     "firmware": {
@@ -96,10 +96,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 629,
-            "endLine": 1016,
+            "line": 633,
+            "endLine": 1019,
             "symbol": "ChassisTask",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -227,7 +227,7 @@
             "line": 126,
             "endLine": 144,
             "symbol": "ChassisDbgUpdate",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -281,7 +281,7 @@
             "line": 219,
             "endLine": 234,
             "symbol": "ChassisInit",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
@@ -807,7 +807,7 @@
             "line": 146,
             "endLine": 218,
             "symbol": "ChassisActuatorsInit",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
@@ -1282,10 +1282,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 295,
-            "endLine": 389,
+            "line": 299,
+            "endLine": 393,
             "symbol": "零力急停沿+零偏标定窗口(ChassisZeroForceEdge)",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -1319,18 +1319,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 660,
-            "endLine": 683,
+            "line": 664,
+            "endLine": 687,
             "symbol": "反馈读入与连杆解算(含左右取号)",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 672,
-            "endLine": 681,
+            "line": 676,
+            "endLine": 685,
             "symbol": "陀螺Z零偏修正(观测段)",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -1362,10 +1362,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 685,
-            "endLine": 689,
+            "line": 689,
+            "endLine": 693,
             "symbol": "GRF_Update 调用",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -1392,10 +1392,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 391,
-            "endLine": 499,
+            "line": 395,
+            "endLine": 503,
             "symbol": "遥控目标生成(ChassisCommandTargets)",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
@@ -1408,18 +1408,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 717,
-            "endLine": 773,
+            "line": 721,
+            "endLine": 777,
             "symbol": "台阶开窗与触阶检测",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 803,
-            "endLine": 835,
+            "line": 807,
+            "endLine": 839,
             "symbol": "ChassisTask 跳跃接入",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -1470,26 +1470,26 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 501,
-            "endLine": 564,
+            "line": 505,
+            "endLine": 568,
             "symbol": "恢复摆角 PD 和 LQR 交接(ChassisApplyRecoveryOverride)",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 901,
-            "endLine": 931,
+            "line": 904,
+            "endLine": 934,
             "symbol": "实测腿速阻尼与腿长 PID",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 932,
-            "endLine": 982,
+            "line": 935,
+            "endLine": 985,
             "symbol": "承重前馈、跳跃腿力替换与差模",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -1513,10 +1513,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 1009,
-            "endLine": 1016,
+            "line": 1012,
+            "endLine": 1019,
             "symbol": "VMC 映射与电机输出",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
@@ -1551,15 +1551,15 @@
             "line": 126,
             "endLine": 144,
             "symbol": "ChassisDbgUpdate",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 878,
-            "endLine": 896,
+            "line": 881,
+            "endLine": 899,
             "symbol": "LQR_calc 调用与输出(镜像已删,EP 直读 four_control_datas)",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -1614,10 +1614,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 660,
-            "endLine": 670,
+            "line": 664,
+            "endLine": 674,
             "symbol": "左右反馈取号",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -1753,23 +1753,23 @@
             "line": 41,
             "endLine": 53,
             "symbol": "偏航观测来源说明(文件头)",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 347,
-            "endLine": 378,
+            "line": 351,
+            "endLine": 382,
             "symbol": "零力态两段式零偏标定(ChassisZeroForceEdge 内)",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 672,
-            "endLine": 681,
+            "line": 676,
+            "endLine": 685,
             "symbol": "零偏修正应用(观测段,yaw 增量积分/dyaw 直减)",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -1792,10 +1792,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 660,
-            "endLine": 699,
+            "line": 664,
+            "endLine": 703,
             "symbol": "ChassisTask 观测段",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -1990,10 +1990,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 391,
-            "endLine": 499,
+            "line": 395,
+            "endLine": 503,
             "symbol": "挡位斜坡与行驶参考(ChassisCommandTargets)",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -2058,10 +2058,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 717,
-            "endLine": 773,
+            "line": 721,
+            "endLine": 777,
             "symbol": "检测窗口与同拍接管",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
@@ -2120,15 +2120,15 @@
             "line": 236,
             "endLine": 251,
             "symbol": "ChassisProtectedAirMask",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 789,
-            "endLine": 846,
+            "line": 793,
+            "endLine": 850,
             "symbol": "轮受阻位与重锚",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -2154,26 +2154,26 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 741,
-            "endLine": 796,
+            "line": 745,
+            "endLine": 800,
             "symbol": "台阶接管、控制目标与掩码",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 803,
-            "endLine": 847,
+            "line": 807,
+            "endLine": 851,
             "symbol": "动作相位与轮门控",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 803,
-            "endLine": 837,
+            "line": 807,
+            "endLine": 841,
             "symbol": "跳跃参考与分侧掩码",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -2385,10 +2385,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 546,
-            "endLine": 564,
+            "line": 550,
+            "endLine": 568,
             "symbol": "摆矩混合(LQR 交接)",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -2458,10 +2458,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 720,
-            "endLine": 738,
+            "line": 724,
+            "endLine": 742,
             "symbol": "触阶许可",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -2495,10 +2495,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 878,
-            "endLine": 1007,
+            "line": 881,
+            "endLine": 1010,
             "symbol": "恢复参考下游使用",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -2589,10 +2589,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 717,
-            "endLine": 748,
+            "line": 721,
+            "endLine": 752,
             "symbol": "开窗条件",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -2759,10 +2759,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 741,
-            "endLine": 796,
+            "line": 745,
+            "endLine": 800,
             "symbol": "双侧接管与受阻位重算",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -2787,10 +2787,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 850,
-            "endLine": 877,
+            "line": 853,
+            "endLine": 880,
             "symbol": "动作侧参考覆盖",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -3035,18 +3035,18 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 509,
-            "endLine": 545,
+            "line": 513,
+            "endLine": 549,
             "symbol": "PD 替换",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 546,
-            "endLine": 564,
+            "line": 550,
+            "endLine": 568,
             "symbol": "平衡接管保持分量",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -3069,10 +3069,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 501,
-            "endLine": 564,
+            "line": 505,
+            "endLine": 568,
             "symbol": "纯 PD、混合和 LQR",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -3103,10 +3103,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 901,
-            "endLine": 931,
+            "line": 904,
+            "endLine": 934,
             "symbol": "长度刚度与实测速度阻尼",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
@@ -3137,10 +3137,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 932,
-            "endLine": 954,
+            "line": 935,
+            "endLine": 957,
             "symbol": "重力前馈与差动横滚",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
@@ -3153,10 +3153,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 955,
-            "endLine": 969,
+            "line": 958,
+            "endLine": 972,
             "symbol": "跳跃轴向力替换",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -3179,10 +3179,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 988,
-            "endLine": 1007,
+            "line": 991,
+            "endLine": 1010,
             "symbol": "out_gate",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -3278,10 +3278,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 572,
-            "endLine": 601,
+            "line": 576,
+            "endLine": 605,
             "symbol": "四关节前馈与下发",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -3308,10 +3308,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 592,
-            "endLine": 601,
+            "line": 596,
+            "endLine": 605,
             "symbol": "DMMotorSetCtrlMode / DMMotorSetRef",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -3334,10 +3334,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 603,
-            "endLine": 628,
+            "line": 607,
+            "endLine": 632,
             "symbol": "轮门控、计划速度与下发",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
@@ -3371,10 +3371,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 624,
-            "endLine": 626,
+            "line": 628,
+            "endLine": 630,
             "symbol": "DJIMotorSetRef",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
@@ -3448,7 +3448,7 @@
             "line": 146,
             "endLine": 218,
             "symbol": "ChassisActuatorsInit",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -3492,7 +3492,7 @@
             "line": 146,
             "endLine": 218,
             "symbol": "ChassisActuatorsInit",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           }
         ],
         "metadata": {
@@ -3664,7 +3664,7 @@
             "line": 148,
             "endLine": 207,
             "symbol": "4 个关节实例",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
@@ -3698,7 +3698,7 @@
             "line": 210,
             "endLine": 218,
             "symbol": "两轮 PowerControlInit",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
@@ -3832,7 +3832,7 @@
             "line": 126,
             "endLine": 144,
             "symbol": "ChassisDbgUpdate",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
@@ -4395,10 +4395,10 @@
           {
             "rootId": "firmware",
             "path": "application/chassis/chassis.c",
-            "line": 803,
-            "endLine": 835,
+            "line": 807,
+            "endLine": 839,
             "symbol": "ChassisTask 跳跃接入",
-            "revision": "700e4ea"
+            "revision": "59994a6"
           },
           {
             "rootId": "firmware",
