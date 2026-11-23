@@ -18,6 +18,8 @@
 #include "grf_observer.h"
 #include "step_collision.h"
 #include "chassis_friction.h"
+#include "chassis_utils.h"
+#include "chassis_step_leg.h"
 #include "stm32f4xx_hal.h"
 #include <math.h>
 
@@ -31,10 +33,6 @@ static Subscriber_t *chassis_cmd_sub;
 static Chassis_Ctrl_Cmd_s chassis_cmd_recv;
 #define RC_DRIVE_ACTIVE_VX 0.02f /* m/s, |vx|低于此视为松杆→定点 */
 #define STEP_COLLISION_WINDOW_MS 15000u /* SW1 单次检测窗口，修改源码后重新编译 */
-#define STEP_LEG_LENGTH_TOL 0.01f /* m，先确认实测收短再回摆（UNTESTED） */
-#define STEP_LEG_REAR_ALIGN_EPS 0.19f /* rad，2026-11-20 右侧停在距正后方 0.183 rad，原 0.10；新值 UNTESTED */
-#define STEP_LEG_READY_ANGLE_TOL 0.12f /* rad，2026-11-20 右回摆误差 0.102，原 0.10；新值 UNTESTED */
-#define STEP_LEG_READY_LEN_MIN 0.10f /* m，2026-11-20 回摆末端最低约 0.107；新值 UNTESTED */
 
 /* ===== 模型一致 yaw（2026-10-31 剪刀腿根因修复）=====
  * model_lagrange.py 的偏航状态 ψ = [Δ轮位移 + l·(θ_l−θ_r)]/(2Rl)，是"差动里程
@@ -169,45 +167,11 @@ volatile float    prot_theta_win  = 1.2f;   /* 态7 出口: 双腿 |θ_body|<此
 volatile uint16_t prot_timeout    = 8000;   /* 态7 超时 tick -> 回脱力等重新切档 */
 volatile uint8_t  prot_force_arm  = 0;      /* ep 置 1 跳过切档直接武装（调试用, 武装后自动清零） */
 
-/* 腿长速度估计状态（P-P 级联的阻尼项用） */
-typedef struct
-{
-    float last_L;      /* 上次变化的腿长读数 */
-    float dt_acc;      /* 距上次变化的累计时间 s */
-    float raw;         /* 本拍差分原始值 */
-    float filt;        /* 低通后的 Ldot */
-    uint8_t started;
-} LegVelState_s;
+/* 腿长速度估计状态实例（类型与估计器见 chassis_utils.h） */
 static LegVelState_s l_legvel, r_legvel;
 #if WHEELLEG_JUMP_ENABLE || WHEELLEG_BALANCE_LEG_VEL_HOLD
 static LegVelState_s l_held_legvel, r_held_legvel;
 #endif
-
-/* Ldot 估计：DM 反馈 500Hz，1kHz 循环里差分隔拍为 0，
- * 必须按"上次变化以来的累计时间"归一，否则均值少一半。 */
-static float LegVelEst(float L, LegVelState_s *st, uint8_t hold_between_samples)
-{
-    if (!st->started)
-    {
-        st->last_L = L;
-        st->started = 1;
-        return 0.0f;
-    }
-    st->dt_acc += 0.001f;
-    if (L != st->last_L)
-    {
-        st->raw = (L - st->last_L) / st->dt_acc;
-        st->last_L = L;
-        st->dt_acc = 0.0f;
-    }
-    else if (!hold_between_samples || st->dt_acc > 0.005f)
-    {
-        /* 跳跃的阻尼与 5 ms 保持配套，正常路径按开关选择估计方式。 */
-        st->raw = 0.0f;
-    }
-    st->filt += LEG_VEL_LPF * (st->raw - st->filt);
-    return st->filt;
-}
 
 attitude_t *chassis_IMU_data;
 r_leg_Resolve r_leg;
@@ -362,54 +326,6 @@ void ChassisInit()
     r_wheel_motor = motors.r_wheel_motor;
 }
 
-/* 角度差 wrap 到 ±π（统一状态机连续角跟踪用, 2026-11-09） */
-static float rec_wrap_pi(float a)
-{
-    return a - 2.0f * PI * roundf(a / (2.0f * PI));
-}
-
-/* 追赶目标由反馈位置重写。按到终点的剩余角与现有超前量给参考速度，
- * 到位带内取消摆动前馈，PD 实测速度项继续制动。 */
-static float ChaseReferenceSpeed(float remaining, float tolerance, float ahead)
-{
-    if (!isfinite(remaining) || !isfinite(ahead) || ahead <= 0.0f)
-        return 0.0f;
-
-    const float travel = fmaxf(0.0f, fabsf(remaining) - tolerance);
-    return copysignf(rec_done_zero_rate * fminf(1.0f, travel / ahead), remaining);
-}
-
-typedef enum
-{
-    STEP_LEG_IDLE,
-    STEP_LEG_BACKSWING,
-    STEP_LEG_TUCK,
-    STEP_LEG_RETURN,
-    STEP_LEG_READY
-} StepLegPhase_e;
-
-typedef struct
-{
-    float length_target;     /* m */
-    float theta_body_target; /* rad，机体系 */
-    uint8_t phase;
-} StepLegMotion_s;
-
-/* EP 顺序 [0] 左、[1] 右。READY 保持短腿和准备摆角，等待双侧同拍接管。 */
-volatile StepLegMotion_s step_leg_motion[2];
-
-static void StepLegMotion_Reset(void)
-{
-    step_leg_motion[0] = (StepLegMotion_s){0};
-    step_leg_motion[1] = (StepLegMotion_s){0};
-}
-
-static uint8_t StepLegMotion_ActiveMask(void)
-{
-    return ((step_leg_motion[0].phase != STEP_LEG_IDLE) ? GRF_AIR_LEFT : 0) |
-           ((step_leg_motion[1].phase != STEP_LEG_IDLE) ? GRF_AIR_RIGHT : 0);
-}
-
 static uint8_t ChassisProtectedAirMask(uint8_t step_leg_mask)
 {
     /* 动作侧已有自己的轮控门和腿长参考，GRF 只管理仍由正常 LQR 控制的侧。 */
@@ -417,72 +333,6 @@ static uint8_t ChassisProtectedAirMask(uint8_t step_leg_mask)
         ? (GRF_AIR_BOTH & ~step_leg_mask)
         : 0;
     return GRF_GetAirMask() & normal_lqr_wheels;
-}
-
-static LegFrictionPlan_s StepLegMotion_Update(volatile StepLegMotion_s *leg, uint8_t hit,
-                                              float theta_body, float measured_length)
-{
-    LegFrictionPlan_s plan = {0};
-    const float rear_angle = -0.5f * PI;
-    if (leg->phase == STEP_LEG_IDLE)
-    {
-        if (!hit)
-            return plan;
-        leg->phase = STEP_LEG_BACKSWING;
-    }
-    /* 命中后先锁轮；等反馈有效才从实际腿长开始生成动作参考。 */
-    if (!isfinite(theta_body) || !isfinite(measured_length) || measured_length <= 0.0f)
-    {
-        if (leg->phase == STEP_LEG_READY)
-            leg->phase = STEP_LEG_RETURN;
-        return plan;
-    }
-    if (leg->length_target <= 0.0f)
-        leg->length_target = measured_length;
-
-    const float previous_length = leg->length_target;
-    const float rear_error = rec_wrap_pi(rear_angle - theta_body);
-    const float low_error = rec_wrap_pi(rec_theta_end - theta_body);
-    const uint8_t rear_reached = fabsf(rear_error) <= STEP_LEG_REAR_ALIGN_EPS;
-    const uint8_t length_reached = fabsf(measured_length - rec_l_low) <= STEP_LEG_LENGTH_TOL;
-
-    if (leg->phase == STEP_LEG_BACKSWING && rear_reached)
-        leg->phase = STEP_LEG_TUCK;
-
-    if (leg->phase == STEP_LEG_TUCK)
-    {
-        /* 锁住后摆角先收腿，长度目标到位且实际收短后才让轮胎向下回摆。 */
-        const float length = leg->length_target;
-        if (length > rec_l_low)
-            leg->length_target = fmaxf(rec_l_low, length - rec_retract_rate);
-        else
-            leg->length_target = fminf(rec_l_low, length + rec_retract_rate);
-
-        if (rear_reached && length_reached && leg->length_target == rec_l_low)
-            leg->phase = STEP_LEG_RETURN;
-    }
-
-    /* 先到的一侧保持准备姿态，每拍复核，双侧交接只用同一拍的到位结果。 */
-    if (leg->phase == STEP_LEG_RETURN || leg->phase == STEP_LEG_READY)
-    {
-        const uint8_t pose_ready =
-            measured_length >= STEP_LEG_READY_LEN_MIN &&
-            measured_length <= rec_l_low + STEP_LEG_LENGTH_TOL &&
-            fabsf(low_error) <= STEP_LEG_READY_ANGLE_TOL;
-
-        leg->phase = pose_ready ? STEP_LEG_READY : STEP_LEG_RETURN;
-    }
-
-    /* 复用自起的摆角超前量，限定大角度摆动的误差。回摆段腿长保持收短。 */
-    float error = leg->phase <= STEP_LEG_TUCK ? rear_error : low_error;
-    LIMIT_MIN_MAX(error, -rec_chase_push, rec_chase_push);
-    leg->theta_body_target = theta_body + error;
-    plan.length_step = leg->length_target - previous_length;
-    if (leg->phase == STEP_LEG_BACKSWING)
-        plan.theta_speed = ChaseReferenceSpeed(rear_error, STEP_LEG_REAR_ALIGN_EPS, rec_chase_push);
-    else if (leg->phase == STEP_LEG_RETURN)
-        plan.theta_speed = ChaseReferenceSpeed(low_error, STEP_LEG_READY_ANGLE_TOL, rec_chase_push);
-    return plan;
 }
 
 #if WHEELLEG_JUMP_ENABLE || WHEELLEG_BALANCE_THETA_LEVEL
@@ -1318,8 +1168,8 @@ void ChassisTask()
                 : cont_l + ((dl > 0.0f) ? ahead : -ahead);
         cur_r = (fabsf(dr) <= ahead) ? end_r
                 : cont_r + ((dr > 0.0f) ? ahead : -ahead);
-        plan_l.theta_speed = ChaseReferenceSpeed(end_l - cont_l, rec_align_eps, ahead);
-        plan_r.theta_speed = ChaseReferenceSpeed(end_r - cont_r, rec_align_eps, ahead);
+        plan_l.theta_speed = ChaseReferenceSpeed(end_l - cont_l, rec_align_eps, ahead, rec_done_zero_rate);
+        plan_r.theta_speed = ChaseReferenceSpeed(end_r - cont_r, rec_align_eps, ahead, rec_done_zero_rate);
     }
     dbg_goal_l = cur_l;   /* ep 可读: 当前摆角目标(连续角) */
     dbg_goal_r = cur_r;

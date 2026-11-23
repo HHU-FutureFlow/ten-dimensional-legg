@@ -45,8 +45,7 @@ extern volatile float l_wheel_direction;
  * volatile 全局: 支持 ep 在线整定,无需重编译烧录。
  * Kp_pos: 位置刚度 N/m；Kv_vel: 轴向阻尼 N/(m/s)。
  * 2026-11-01 加强: 800/100 -> 1600/200,压腿长下垂差(6.5N 扰动 8mm->4mm)。
- * Ldot 一阶 LPF 系数（1kHz 循环），截止约 25 Hz */
-#define LEG_VEL_LPF       (0.15f)
+ * LEG_VEL_LPF(Ldot 低通系数)已迁 chassis_utils.h(随 LegVelEst)。 */
 extern volatile float leg_kp_pos;   /* N/m, 原 800 */
 extern volatile float leg_kv_vel;   /* N/(m/s), 原 100 */
 
