@@ -66,4 +66,4 @@ ChassisJump_Update 生成相位、腿长及 LQR 参考。ChassisJump_LegForce
 分别开启 WHEELLEG_BALANCE_THETA_LEVEL（差模）、WHEELLEG_BALANCE_POSITION_HOLD
 （位置保持）、WHEELLEG_BALANCE_LEG_VEL_HOLD（腿速保持和阻尼）。
 跳跃差模和腿速保持属于动作控制。EP 可观测 jump_ph、jump_push_abort、
-jump_shrink_airok、jump_land_touched、chassis_dbg.Fleg_cmd 和 grf_dbg.air_mask。
+jump_shrink_airok、jump_land_touched、four_control_datas.l_Tleg/r_Tleg 和 grf_dbg.air_mask。

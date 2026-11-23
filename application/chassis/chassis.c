@@ -136,16 +136,6 @@ static void ChassisDbgUpdate()
     chassis_dbg.wheel_vel[1] = r_wheel_motor->measure.speed_aps * d2r;
 }
 
-/* 把喂进 LQR 的状态拷一份出来,方便在 Ozone 里和 T_lw 对着看 */
-static void ChassisDbgLqr(const ten_balance_observation *o)
-{
-    chassis_dbg.lqr_x[0] = o->s;        chassis_dbg.lqr_x[1] = o->ds;
-    chassis_dbg.lqr_x[2] = o->yaw;      chassis_dbg.lqr_x[3] = o->dyaw;
-    chassis_dbg.lqr_x[4] = o->l_theta;  chassis_dbg.lqr_x[5] = o->l_dtheta;
-    chassis_dbg.lqr_x[6] = o->r_theta;  chassis_dbg.lqr_x[7] = o->r_dtheta;
-    chassis_dbg.lqr_x[8] = o->phi;      chassis_dbg.lqr_x[9] = o->dphi;
-}
-
 void ChassisActuatorsInit(ChassisActuators_s *motors)
 {
     Motor_Init_Config_s r_config = {
@@ -383,7 +373,6 @@ static void ChassisCommandTargets(uint8_t protected_air_at_start,
                             + yaw_coef_leg * (ten_balance_observe.l_theta - ten_balance_observe.r_theta);
     ten_balance_observe.dyaw = YAW_COEF_WHEEL * (r_wheel.r_dx - l_wheel.l_dx)
                              + yaw_coef_leg * (ten_balance_observe.l_dtheta - ten_balance_observe.r_dtheta);
-    ChassisDbgLqr(&ten_balance_observe);
 
     /* 轮使能沿重锚定 s/yaw 已并入态5 进入沿(直接写目标, 不再走请求标志)。 */
 
@@ -837,10 +826,6 @@ void ChassisTask()
 
     LQR_calc(&ten_balance_observe, &ten_targets, control_targets,
              wheel_block_mask, step_ref_mask, &feedback, &four_control_datas);
-    chassis_dbg.lqr_u[0] = four_control_datas.l_Tw;
-    chassis_dbg.lqr_u[1] = four_control_datas.r_Tw;
-    chassis_dbg.lqr_u[2] = four_control_datas.l_Tp;
-    chassis_dbg.lqr_u[3] = four_control_datas.r_Tp;
 #if WHEELLEG_JUMP_ENABLE || WHEELLEG_BALANCE_POSITION_HOLD
     if (feedback.position_deadband > 0.0f && prone_rec_state == PRS_DONE &&
         !step_leg_mask && !wheel_block_mask && !drive)
@@ -931,8 +916,6 @@ void ChassisTask()
             four_control_datas.r_Tleg = jump_force[1] + dF_roll;
     }
 #endif
-    chassis_dbg.Fleg_cmd[0] = four_control_datas.l_Tleg;
-    chassis_dbg.Fleg_cmd[1] = four_control_datas.r_Tleg;
 #if WHEELLEG_JUMP_ENABLE
     chassis_dbg.Ldot[0] = jump_ref.active ? jump_input.velocity[0] : l_dot;
     chassis_dbg.Ldot[1] = jump_ref.active ? jump_input.velocity[1] : r_dot;
@@ -940,11 +923,9 @@ void ChassisTask()
     chassis_dbg.Ldot[0] = l_dot;
     chassis_dbg.Ldot[1] = r_dot;
 #endif
-    chassis_dbg.Roll = chassis_IMU_data->Roll;
     chassis_dbg.dFroll = dF_roll;
     chassis_dbg.theta_body[0] = l_theta_body;
     chassis_dbg.theta_body[1] = r_theta_body;
-    chassis_dbg.prot = (float)(prot_enable | (prot_armed << 1));
 
     /* 输出闸: ①观测无效期(上电头几拍读数全 0, 腿长环却会以 30N/腿推腿,
      * 折叠位形下该力把腿/轮推进入瞬态, 恢复锚定就锚到运动半途

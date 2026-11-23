@@ -79,9 +79,6 @@ volatile float rec_push_band = 0.02f;     /* 误差门限 m */
 volatile float rec_push_max  = 60.0f;     /* 大误差期间 PID 分量限幅 N(60: 前腿承压+左腿摩擦+翻身段共用, 关节力矩约6-9N·m) */
 /* ---- PD 段专用重力前馈: 倒地/顶升期腿不承机体全重(车头分担), 小前馈防平衡点抬高 ---- */
 volatile float rec_gravity_ff = 0.0f;     /* N/腿 */
-/* ---- ep 诊断: 连续目标角/连续实测角(态2/3 对齐进度, 不 wrap 的累计值) ---- */
-volatile float dbg_goal_l = 0.0f, dbg_goal_r = 0.0f;
-volatile float dbg_cont_l = 0.0f, dbg_cont_r = 0.0f;
 
 /* ===== T3 翻倒保护 + 翻身段参数（2026-11-05 SPR 式, 2026-11-09 并入统一状态机为态7）=====
  * 判据与动作全部基于腿摆角 θ_body（纯编码器量, 见监控块注释）,
@@ -347,11 +344,10 @@ uint8_t Recovery_Update(float pitch_rad, float roll_rad,
 
     if ((prone_rec_state >= PRS_EXTEND && prone_rec_state <= PRS_PUSH)
         || prone_rec_state == PRS_QUICK)
-    {   /* 连续实测角跟踪: 差值 wrap 到 ±π 后累加, 对齐翻越 ±π 解算折返不丢圈 */
+    {   /* 连续实测角跟踪: 差值 wrap 到 ±π 后累加, 对齐翻越 ±π 解算折返不丢圈。
+         * ep 直读 cont_l/cont_r(连续角)与 cur_l/cur_r(当前目标)观察对齐进度 */
         cont_l += rec_wrap_pi(l_theta_body - cont_l);
         cont_r += rec_wrap_pi(r_theta_body - cont_r);
-        dbg_cont_l = cont_l;
-        dbg_cont_r = cont_r;
         rec6_t++;
     }
 
@@ -716,8 +712,6 @@ uint8_t Recovery_Update(float pitch_rad, float roll_rad,
         plan_l.theta_speed = ChaseReferenceSpeed(end_l - cont_l, rec_align_eps, ahead, rec_done_zero_rate);
         plan_r.theta_speed = ChaseReferenceSpeed(end_r - cont_r, rec_align_eps, ahead, rec_done_zero_rate);
     }
-    dbg_goal_l = cur_l;   /* ep 可读: 当前摆角目标(连续角) */
-    dbg_goal_r = cur_r;
 
     /* ===== T3: 运行中翻倒监控（2026-11-05, SPR chassis_task.c:362 同款判据换腿摆角版）=====
      * LQR 斜坡期/站立/行驶（态4/态5）双腿任一 |θ_body| 出窗驻留 -> 脱力进态7。

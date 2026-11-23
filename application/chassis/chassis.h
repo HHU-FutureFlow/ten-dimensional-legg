@@ -59,20 +59,21 @@ extern volatile float leg_kv_vel;   /* N/(m/s), 原 100 */
 extern volatile float roll_kp;      /* N/rad, 原 100 */
 extern volatile float roll_kd;      /* N/(rad/s), 原 10 */
 
-/* 电机反馈量调试映射:在 Ozone/VarScope 全局符号里搜 chassis_dbg 即可
+/* 电机反馈量调试映射:在 EP 全局符号里搜 chassis_dbg 即可
  * leg_*  : [0]r_front [1]r_behind [2]l_front [3]l_behind
  * wheel_*: [0]l_wheel [1]r_wheel
  * 位置单位 rad,速度单位 rad/s,符号与 ChassisTask 内的控制量一致
  *
- * lqr_x[] 是喂进 LQR 的 10 个状态（单位: m, m/s, rad, rad/s），
- * lqr_u[]     : [0]l_Tw [1]r_Tw [2]l_Tp [3]r_Tp，LQR 输出（N·m）
- * Fleg_cmd[]  : [0]左腿 [1]右腿，重力前馈+PID 后的虚拟腿长力（N）
- * joint_T_cmd : [0]r_front [1]r_behind [2]l_front [3]l_behind，实际关节力矩指令（N·m）
- * Tw_cmd[]    : [0]左轮 [1]右轮，限幅后真正下发的轮力矩（N·m）
- * 排查"往一个方向跑不停"时看这三个：
- *   phi 变负 + Tw 变正            -> 俯仰环方向对
- *   车体回正了但 Tw 不换号        -> s/ds 环没起作用
- *   Tw 在 ±4.9 之间几毫秒来回跳   -> 延迟振荡（控制频率不够） */
+ * 2026-11-23 瘦身: 源量 EP 直读可达的镜像字段已删, 按字段路径读取:
+ *   LQR 输入状态  -> ten_balance_observe（原 lqr_x）
+ *   LQR 输出力矩  -> four_control_datas.l_Tw/r_Tw/l_Tp/r_Tp（原 lqr_u）
+ *   虚拟腿长力    -> four_control_datas.l_Tleg/r_Tleg（原 Fleg_cmd）
+ *   IMU roll      -> chassis_IMU_data->Roll（原 Roll 字段）
+ *   状态机段/武装 -> prone_rec_state / prot_armed / prot_enable（原 prot 位包）
+ * 排查"往一个方向跑不停"时看：
+ *   phi 变负 + four_control_datas.l_Tw 变正  -> 俯仰环方向对
+ *   车体回正了但 l_Tw 不换号                 -> s/ds 环没起作用
+ *   l_Tw 在 ±4.9 之间几毫秒来回跳            -> 延迟振荡（控制频率不够） */
 typedef struct
 {
     float leg_pos[4];
@@ -80,20 +81,14 @@ typedef struct
     float wheel_pos[2];
     float wheel_vel[2];
 
-    float lqr_x[10];
-    float lqr_u[4];
-    float Fleg_cmd[2];
     float Ldot[2];        /* [0]左 [1]右，腿长速度估计（m/s），低通后 */
     float joint_T_cmd[4];
     float fric_ff[4];     /* [0]r_f [1]r_b [2]l_f [3]l_b，限幅后实际生效的关节摩擦前馈(N·m) */
     float wheel_ff[2];    /* [0]左轮 [1]右轮，限幅后实际生效的轮端摩擦前馈(N·m) */
     float Tw_cmd[2];
-    float Roll;           /* IMU roll，度，调试 roll 补偿用 */
     float dFroll;         /* roll 补偿力差 ΔF（N），右腿为正 */
-    float rec_state;      /* v2 遗留字段(已无读写); 现行状态机读全局 prone_rec_state(0~7) */
     /* ===== T3/T4 翻倒保护（2026-11-05, ep 观察）===== */
     float theta_body[2];  /* [0]左 [1]右, 机体系摆角 = l_theta + Pitch·rad（纯编码器量） */
-    float prot;           /* bit0=监控使能 prot_enable, bit1=态4已武装 prot_armed */
     float joint_T_base[4];    /* VMC 后电机轴基础力矩，N·m */
     float wheel_T_base[2];    /* 轮端基础力矩，N·m，前进为正 */
     float joint_ref_speed[4]; /* 摩擦前馈使用的电机轴参考速度，rad/s */
