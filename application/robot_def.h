@@ -19,6 +19,48 @@
 #define CHASSIS_USE_N630_VESC 0 //1为底盘用N630
 #define CHASSIS_TYPE 0 //0为全向轮底盘，1为麦克纳姆轮底盘
 
+/* ===== 轮腿遥控接入模式(编译期切换,改后需重编译) =====
+ * WHEELLEG_REMOTE_NONE: 不接遥控,纯站立调试。robot_cmd 每拍发布
+ *   CHASSIS_STANDING_TEST,chassis 按原始硬编码基线跑(全零目标+腿长0.25m(rec_l_rise))。
+ * WHEELLEG_REMOTE_SBUS: FS-i6X + iA6B (SW3两档=行驶使能, SW2三档=腿长挡, SW0两档=急停)。
+ * WHEELLEG_REMOTE_DBUS: DT7 (左开关下=遥控, 右开关下=急停),解析走DBUS分支。
+ * WHEELLEG_REMOTE_VT02: 仅 USART1 接收图传或串口桥的 0x0304 键鼠帧。 */
+#define WHEELLEG_REMOTE_NONE 0
+#define WHEELLEG_REMOTE_SBUS 1
+#define WHEELLEG_REMOTE_DBUS 2
+#define WHEELLEG_REMOTE_VT02 3
+/* 选择控制模式后使用常规构建。双开时遥控器在线优先。 */
+#define WHEELLEG_REMOTE_MODE WHEELLEG_REMOTE_SBUS
+#define WHEELLEG_VT02_FALLBACK 1 /* SBUS/DBUS 离线时允许 VT‑02 接管，设为 0 可关闭 */
+
+/* CMake 的台架构建注入 1；默认入口使用普通固件。 */
+#ifndef WHEELLEG_DEBUG_MODE
+#define WHEELLEG_DEBUG_MODE 0
+#endif
+
+/* 首次整合用现有底盘做基线构建，跳跃和三组常态试验分别在编译时开启。 */
+#ifndef WHEELLEG_JUMP_ENABLE
+#define WHEELLEG_JUMP_ENABLE 0
+#endif
+#ifndef WHEELLEG_BALANCE_POSITION_HOLD
+#define WHEELLEG_BALANCE_POSITION_HOLD 0
+#endif
+#ifndef WHEELLEG_BALANCE_LEG_VEL_HOLD
+#define WHEELLEG_BALANCE_LEG_VEL_HOLD 0
+#endif
+
+#define WHEELLEG_REMOTE_HAS_RC (WHEELLEG_REMOTE_MODE == WHEELLEG_REMOTE_SBUS || \
+                                WHEELLEG_REMOTE_MODE == WHEELLEG_REMOTE_DBUS)
+#define WHEELLEG_REMOTE_HAS_VT02 (WHEELLEG_REMOTE_MODE == WHEELLEG_REMOTE_VT02 || \
+                                  (WHEELLEG_REMOTE_HAS_RC && WHEELLEG_VT02_FALLBACK))
+
+/* 解析层开关由上面的模式派生,勿单独修改 */
+#if WHEELLEG_REMOTE_MODE == WHEELLEG_REMOTE_DBUS
+#define REMOTE_CONTROL_USE_SBUS 0
+#else
+#define REMOTE_CONTROL_USE_SBUS 1
+#endif
+
 /* 开发板类型定义,烧录时注意不要弄错对应功能;修改定义后需要重新编译,只能存在一个定义! */
 #define ONE_BOARD // 单板控制整车
 // #define CHASSIS_BOARD //底盘板
@@ -105,6 +147,8 @@ typedef enum
     CHASSIS_ROTATE,            // 小陀螺模式
     CHASSIS_NO_FOLLOW,         // 不跟随，允许全向平移
     CHASSIS_FOLLOW_GIMBAL_YAW, // 跟随模式，底盘叠加角度环控制
+    CHASSIS_WHEELLEG_DRIVE,    // 轮腿遥控行驶: vx=前后速度指令(m/s), wz=转向角速度指令(rad/s)
+    CHASSIS_STANDING_TEST,     // 轮腿站立调试: 全零目标+腿长0.25m(rec_l_rise),与未接遥控的硬编码基线一致
 } chassis_mode_e;
 
 // 云台模式设置
@@ -153,6 +197,14 @@ typedef struct
  * @brief 对于双板情况,遥控器和pc在云台,裁判系统在底盘
  *
  */
+/* 零值用于没有跳跃控制源的消息。掉线不能当成操作者松杆。 */
+typedef enum
+{
+    CHASSIS_JUMP_CANCEL = 0,
+    CHASSIS_JUMP_RELEASED,
+    CHASSIS_JUMP_HELD,
+} chassis_jump_cmd_e;
+
 // cmd发布的底盘控制数据,由chassis订阅
 typedef struct
 {
@@ -163,8 +215,11 @@ typedef struct
     float offset_angle; // 底盘和归中位置的夹角
     chassis_mode_e chassis_mode;
     int chassis_speed_buff;
+    float leg_length_target; // 行驶腿长目标 m(2026-11-15 SW2三挡: 0.15/0.25/0.35; 0=不使用→chassis恒 rec_l_rise, 态1~4/6/7 恢复流程不接)
     // UI部分
     //  ...
+    uint32_t step_window_request; /* SBUS SW1 有效上→下时递增，底盘消费一次 */
+    uint8_t jump_command;        /* chassis_jump_cmd_e，SBUS 跳跃按住、松杆或取消 */
 
 } Chassis_Ctrl_Cmd_s;
 

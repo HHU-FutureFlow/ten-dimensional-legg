@@ -16,7 +16,12 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON) 
 
 # 指定工程名称和语言类型
-project(basic_framework C ASM) 
+project(basic_framework C ASM)
+
+option(WHEELLEG_DEBUG_MODE "Build the wheelleg bench application" OFF)
+if(WHEELLEG_DEBUG_MODE)
+    add_compile_definitions(WHEELLEG_DEBUG_MODE=1)
+endif()
 
 # 选择构建类型
 set(CMAKE_BUILD_TYPE Debug) # Debug Release RelWithDebInfo MinSizeRel
@@ -77,6 +82,8 @@ file(GLOB_RECURSE SOURCES
     "application/*.c"
 )
 
+list(FILTER SOURCES EXCLUDE REGEX "/application/debug_mode/")
+
 # 汇编文件路径
 # ENABLE_LANGUAGE(ASM)
 set(ASM_SOURCES
@@ -105,7 +112,14 @@ endif ()
 # Keep the CMake target name extension-free so IDE analyzers do not append ".elf" twice.
 add_executable(${PROJECT_NAME}  ${SOURCES} ${ASM_SOURCES} ${LINKER_SCRIPT})
 set_target_properties(${PROJECT_NAME} PROPERTIES SUFFIX ".elf")
-target_link_libraries(${PROJECT_NAME} ${DSP_NAME} m) # link DSP lib and math lib
+if(WHEELLEG_DEBUG_MODE)
+    add_library(wheelleg_debug_mode STATIC
+        application/debug_mode/debug_mode.c
+        application/debug_mode/friction_test.c
+    )
+    target_link_libraries(basic_framework wheelleg_debug_mode)
+endif()
+target_link_libraries(basic_framework ${DSP_NAME} m) # link DSP lib and math lib
 
 add_custom_command(
     TARGET ${PROJECT_NAME} POST_BUILD

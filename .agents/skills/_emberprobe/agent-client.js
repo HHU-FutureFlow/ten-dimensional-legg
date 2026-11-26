@@ -1,50 +1,171 @@
 "use strict";
-const fs = require("fs");
 const path = require("path");
 const http = require("http");
+const { locate } = require("./bridge-locator");
 
+// Skill root that issued the call (.agents/skills or a custom copy), so the extension can check that copy's integrity.
+const SKILL_ROOT = path.resolve(__dirname, "..");
+
+// Compatibility export returning the located descriptor (host/port/token). New code uses locate() from bridge-locator.
 function descriptor(workspace) {
-    const root = path.resolve(workspace || process.cwd());
-    const currentPointer = path.join(root, ".agents", "skills", "_emberprobe", "agent-bridge.json");
-    const legacyPointer = path.join(root, ".emberprobe", "agent-bridge.json");
-    // 新安装把指针与共享 Skill 运行时放在一起；升级过渡期仍可读取旧位置。
-    const pointerFile = fs.existsSync(currentPointer) ? currentPointer : legacyPointer;
-    let pointer;
-    try {
-        pointer = JSON.parse(fs.readFileSync(pointerFile, "utf8"));
-    } catch {
-        throw Object.assign(new Error("EmberProbe Agent Bridge descriptor is unavailable."), {
-            code: "BRIDGE_UNAVAILABLE",
-            details: { descriptor: currentPointer }
-        });
-    }
-    // 新格式：工作区文件为指针（不含 token），真实描述文件位于用户目录；旧格式直接存 token 则原地读取
-    const file =
-        typeof pointer.descriptorPath === "string" && pointer.descriptorPath ? pointer.descriptorPath : pointerFile;
-    let value;
-    try {
-        value = JSON.parse(fs.readFileSync(file, "utf8"));
-    } catch {
-        throw Object.assign(new Error("Invalid EmberProbe Agent Bridge descriptor"), {
-            code: "BRIDGE_DESCRIPTOR_INVALID",
-            details: { descriptor: file }
-        });
-    }
-    if (value.host !== "127.0.0.1" || !Number.isInteger(value.port) || !value.token) {
-        throw Object.assign(new Error("Invalid EmberProbe Agent Bridge descriptor"), {
-            code: "BRIDGE_DESCRIPTOR_INVALID",
-            details: { descriptor: file }
-        });
-    }
-    return value;
+    return locate(workspace).descriptor;
 }
 
 const DIAGNOSTICS = {
+    RTT_NOT_RUNNING: [
+        "rtt_state",
+        "RTT 尚未运行或正在等待主机会话。",
+        ["先用 {{method:rtt.status}} 查询状态；按用户要求启动后等待 running 再读取。"],
+        false
+    ],
+    RTT_UNKNOWN_CHANNEL: [
+        "rtt_channel",
+        "所选 RTT 上行通道不可用。",
+        ["用 {{method:rtt.status}} 查看 channels、missingChannels 和 buffers，选择可用通道。"],
+        false
+    ],
+    RTT_MULTICORE_UNSUPPORTED: [
+        "rtt_support",
+        "RTT 不支持多核调试会话。",
+        ["使用单核会话；不要为读取日志自动更改调试配置。"],
+        false
+    ],
+    RTT_CONTROL_BLOCK_UNKNOWN: [
+        "rtt_firmware",
+        "无法定位 RTT 控制块。",
+        ["确认固件集成并初始化 SEGGER RTT，且 ELF 与固件一致。仅按用户要求通过 {{config}} 设置 RTT 地址或搜索范围。"],
+        false
+    ],
+    RTT_CONTROL_BLOCK_AMBIGUOUS: [
+        "rtt_configuration",
+        "找到多个可能的 RTT 控制块。",
+        ["核对 ELF 与固件，仅按用户要求通过 {{config}} 指定控制块地址；不要猜选地址。"],
+        false
+    ],
+    RTT_SCAN_RANGE_TOO_LARGE: [
+        "rtt_configuration",
+        "RTT 搜索范围超出扫描预算。",
+        ["核对 ELF 中的控制块符号，仅按用户要求通过 {{config}} 缩小 RTT 搜索范围或指定地址。"],
+        false
+    ],
+    RTT_SCAN_TIMEOUT: [
+        "rtt_connection",
+        "RTT 控制块搜索时探针无响应，会话已重置。",
+        ["不要自动重复启动；让用户指定控制块地址，或调整 emberprobe.samplingAdapterSpeedKhz。"],
+        false
+    ],
+    RTT_START_TIMEOUT: [
+        "rtt_start",
+        "RTT 启动重试已耗尽，固件可能尚未初始化控制块或通道。",
+        ["先用 {{method:rtt.status}} 核对状态与错误，再检查固件初始化和 ELF；不要自动重复启动。"],
+        false
+    ],
+    RTT_PORT_UNAVAILABLE: [
+        "rtt_connection",
+        "RTT 数据连接无法建立。",
+        ["用 {{method:rtt.status}} 核对状态，检查扩展的连接诊断后再决定是否重试。"],
+        false
+    ],
+    RTT_CHANNEL_DISCONNECTED: [
+        "rtt_connection",
+        "RTT 通道连接已断开。",
+        ["用 {{method:rtt.status}} 核对连接与会话状态。"],
+        false
+    ],
+    RTT_CANCELLED: [
+        "rtt_state",
+        "RTT 操作因停止或会话变化而取消。",
+        ["用 {{method:rtt.status}} 核对当前状态，不要自动重新启动。"],
+        false
+    ],
+    RTT_PARSE_ERROR: [
+        "rtt_firmware",
+        "RTT 控制块或通道信息无法解析。",
+        ["核对固件的 SEGGER RTT 集成、ELF 和扩展的诊断信息。"],
+        false
+    ],
+    RTT_INVALID_ADDRESS: [
+        "rtt_configuration",
+        "RTT 控制块地址无效。",
+        ["仅按用户要求通过 {{config}} 修正 RTT 地址。"],
+        false
+    ],
+    RTT_INPUT_UNAVAILABLE: [
+        "rtt_firmware",
+        "该 RTT 通道没有 down 缓冲，输入无法送达固件。",
+        ["用 {{method:rtt.status}} 查看 channels.down，改用固件配置了 down 缓冲的通道；不要为发送输入修改固件或配置。"],
+        false
+    ],
+    RTT_WRITE_TOO_LARGE: [
+        "rtt_input",
+        "输入超过 down 缓冲或单次 1024 字节的上限，未发送。",
+        ["按 details.maxBytes 缩短输入；不要自行拆分用户的命令，除非用户同意。"],
+        false
+    ],
+    RTT_INPUT_BUSY: [
+        "rtt_input",
+        "上一次 RTT 输入仍在发送。",
+        ["先用 {{method:rtt.read}} 读取固件回复，稍后再发送；不要自动重发。"],
+        true
+    ],
+    RTT_INPUT_CONFIRMATION_INVALID: [
+        "user_decision",
+        "RTT 输入确认已过期、已使用，或输入、通道、RTT 连接发生变化。",
+        ["重新请求发送计划，并在聊天中获得用户明确授权后使用新的 confirmationId。"],
+        false
+    ],
+    RTT_INVALID_RANGE: [
+        "rtt_configuration",
+        "RTT 搜索范围无效。",
+        ["仅按用户要求通过 {{config}} 修正 RTT 搜索范围。"],
+        false
+    ],
+    RTT_INVALID_INTERVAL: [
+        "rtt_configuration",
+        "RTT 轮询间隔无效。",
+        ["仅按用户要求通过 {{config}} 修正 RTT 轮询间隔。"],
+        false
+    ],
+    RTT_INVALID_CHANNELS: [
+        "rtt_configuration",
+        "RTT 通道选择无效。",
+        ["仅按用户要求通过 {{config}} 修正 RTT 通道选择。"],
+        false
+    ],
+    RTT_MODE_REQUIRES_UI_START: [
+        "rtt_configuration",
+        "RTT 配置了通道模式覆盖，只能由用户在 VS Code 中启动。",
+        ["请用户从 EmberProbe 侧栏或命令面板启动 RTT，之后可以继续读取。"],
+        false
+    ],
+    RTT_INVALID_CONTROL_BLOCK: ["rtt_firmware", "RTT 控制块无效。", ["检查固件初始化和控制块地址是否匹配。"], false],
     BRIDGE_UNAVAILABLE: [
         "extension",
-        "EmberProbe 扩展未激活，或工作区中的 Agent Bridge 描述文件不存在。",
-        ["确认已安装并启用 EmberProbe 扩展。", "在 VS Code 中重新加载当前工作区后重试。"],
+        "EmberProbe 扩展未激活、当前工作区未启用 Agent 访问，或找不到包含当前目录的 Agent Bridge。",
+        [
+            "确认已安装并启用 EmberProbe 扩展，并在 VS Code 中打开包含当前目录的工作区。",
+            "若 details.bridgeDisabledFor 非空，请在 EmberProbe 侧边栏为该工作区启用 Agent 访问。",
+            "在 VS Code 中重新加载当前工作区后重试。"
+        ],
         true
+    ],
+    BRIDGE_AMBIGUOUS: [
+        "extension",
+        "多个 EmberProbe 窗口打开了同一文件夹，无法确定应连接哪一个。",
+        [
+            "从 details.instances 中按 hostApp、pid、startedAt 选择目标窗口，设置环境变量 EMBERPROBE_BRIDGE_INSTANCE=<instanceId> 后重试。",
+            "或关闭多余的窗口后重试；EmberProbe 不会自动挑选实例。"
+        ],
+        false
+    ],
+    BRIDGE_PROTOCOL_MISMATCH: [
+        "extension",
+        "Agent Bridge 与当前客户端（skills 脚本或 MCP 服务器）的协议版本不兼容。",
+        [
+            "在 EmberProbe 侧边栏重新安装工作区 Agent Skills，让脚本与扩展版本一致。",
+            "若扩展版本较旧，请更新 EmberProbe 扩展并重新加载窗口。"
+        ],
+        false
     ],
     BRIDGE_DESCRIPTOR_INVALID: [
         "extension",
@@ -68,7 +189,7 @@ const DIAGNOSTICS = {
     CONFIG_INCOMPLETE: [
         "configuration",
         "EmberProbe 尚未配置调试器或 MCU 目标。",
-        ["使用 mcu-config Skill 读取并补全 debugger 与 mcu 配置。"],
+        ["使用 {{config}} 读取并补全 debugger 与 mcu 配置。"],
         false
     ],
     OPENOCD_NOT_READY: [
@@ -152,13 +273,13 @@ const DIAGNOSTICS = {
     VARIABLE_NOT_FOUND: [
         "variable_resolution",
         "当前最新 ELF 中没有该变量。",
-        ["确认变量名，必要时使用 --list 检查 ELF 符号。"],
+        ["确认变量名，必要时使用 {{list}} 检查 ELF 符号。"],
         false
     ],
     AMBIGUOUS_VARIABLE: [
         "variable_resolution",
         "变量名的大小写无关匹配不唯一。",
-        ["使用 --list 查看候选项并提供精确名称。"],
+        ["使用 {{list}} 查看候选项并提供精确名称。"],
         false
     ],
     VARIABLE_AMBIGUOUS: [
@@ -185,8 +306,29 @@ const DIAGNOSTICS = {
     ],
     WRITE_NOT_ALLOWED: [
         "write_safety",
-        "目标地址不在 ELF 的可写 RAM 段（.data/.bss）内，EmberProbe 拒绝写入。",
-        ["确认变量是 RAM 中的全局变量，而非 const/Flash 数据或外设寄存器。"],
+        "目标不可写入：可能不在可写 RAM（.data/.bss 或 linker heap-stack）内，或是 const、指针本体、容器内部字段、越界元素、只读键/集合或位域。",
+        [
+            "确认目标是可变的非 const 标量成员或容器可写元素（map 仅允许写 .second，set/字符串/指针本体只读）。",
+            "裸指针与动态成员需通过 -> 或 .value 显式解引用到可写 RAM 中的标量叶子。"
+        ],
+        false
+    ],
+    WRITE_TARGET_CHANGED: [
+        "write_safety",
+        "动态写入目标的指针/容器描述符、目标世代或连接状态在规划与执行之间发生变化，EmberProbe 已中止以防写错地址。",
+        [
+            "检查 details.written、details.writtenItems 与 details.resultUnknown 核对目标内存是否已部分改动。",
+            "请先重新读取变量当前值再决定是否重试，并重新请求写入计划，不要复用旧的 confirmationId。"
+        ],
+        false
+    ],
+    LIVE_WRITE_BUDGET_EXCEEDED: [
+        "write_safety",
+        "动态写入前后的描述符校验次数、字节数或事务时间超出单批安全预算。",
+        [
+            "减少单次写入的变量数量或缩短深层链表/多容器路径，拆分为多批小请求。",
+            "在调试暂停态或较低总线负载下重试，避免超时。"
+        ],
         false
     ],
     WRITE_TYPE_UNKNOWN: [
@@ -217,7 +359,7 @@ const DIAGNOSTICS = {
         "live_watch",
         "CSV 导出时间范围无效。",
         [
-            "优先使用 --last，或使用带日期且以 Z 结尾的 ISO 8601 UTC 时间戳。",
+            "优先使用 {{last}}，或使用带日期且以 Z 结尾的 ISO 8601 UTC 时间戳。",
             "裸 HH:MM[:SS] 按运行 Skill 的本机时区解析；检查 details.requestedRange.resolvedUtc 确认实际区间。"
         ],
         false
@@ -225,14 +367,14 @@ const DIAGNOSTICS = {
     CSV_SERIES_NOT_FOUND: [
         "live_watch",
         "所选曲线不在目标图表面板的历史缓冲中。",
-        ["检查变量名和 --panel 编号，或省略 --variables 导出全部有数据的曲线。"],
+        ["检查变量名和 {{panel}} 编号，或省略 {{csvVariables}} 导出全部有数据的曲线。"],
         false
     ],
     CSV_EXPORT_EMPTY: [
         "live_watch",
         "所选曲线或时间区间内没有可导出的采样点；常见原因是把 UTC 时刻作为本机 HH:MM 传入。",
         [
-            "优先用 --last 指定相对区间，或传入以 Z 结尾的完整 ISO 8601 UTC 时间戳。",
+            "优先用 {{last}} 指定相对区间，或传入以 Z 结尾的完整 ISO 8601 UTC 时间戳。",
             "检查 details.requestedRange.resolvedUtc 与 localTimeZone，再判断是否需要扩大范围。"
         ],
         true
@@ -268,7 +410,7 @@ const DIAGNOSTICS = {
     INVALID_VARIABLE_PATH: [
         "variable_resolution",
         "变量成员路径无效：基名不是复合类型，或路径无法在布局中解析。",
-        ["确认路径写法，如 sensor.x、buf[0]、buf[1:5]。", "使用 --list 检查 ELF 符号与展开能力。"],
+        ["确认路径写法，如 sensor.x、buf[0]、buf[1:5]。", "使用 {{list}} 检查 ELF 符号与展开能力。"],
         false
     ],
     CONFIG_KEY_FORBIDDEN: [
@@ -286,7 +428,7 @@ const DIAGNOSTICS = {
     SVD_NOT_CONFIGURED: [
         "configuration",
         "当前工作区没有绑定 SVD 文件。",
-        ["使用 mcu-config 选择 SVD，或在 EmberProbe 侧边栏选择/下载官方 SVD。"],
+        ["使用 {{configSvd}} 选择 SVD，或在 EmberProbe 侧边栏选择/下载官方 SVD。"],
         false
     ],
     SVD_READ_FAILED: ["configuration", "已绑定的 SVD 文件不存在或不可读。", ["重新选择 SVD 后重试。"], true],
@@ -295,7 +437,7 @@ const DIAGNOSTICS = {
         "SVD 中没有匹配的外设、寄存器或字段路径。",
         [
             "检查 details.invalidTargets 中的全部无效路径。",
-            "使用 --list 或 --query 查看当前 SVD 的实际命名后，一次性修正整批请求。"
+            "使用 {{peripheralList}} 查看当前 SVD 的实际命名后，一次性修正整批请求。"
         ],
         false
     ],
@@ -314,7 +456,7 @@ const DIAGNOSTICS = {
     TARGET_NOT_PAUSED: [
         "debug_state",
         "SVD 外设读写或当前调试操作需要芯片已暂停。",
-        ["使用 mcu-debug-control --pause 暂停当前调试会话（EmberProbe 内置调试器或 Cortex-Debug）后重试。"],
+        ["使用 {{debugPause}} 暂停当前 EmberProbe 调试会话后重试。"],
         true
     ],
     INVALID_PERIPHERAL_WRITE_VALUE: [
@@ -349,61 +491,65 @@ const DIAGNOSTICS = {
     ],
     DEBUG_SESSION_NOT_ACTIVE: [
         "debug_state",
-        "当前工作区没有活动的调试会话（EmberProbe 内置调试器或 Cortex-Debug）。",
-        ["使用 mcu-debug-control --start 启动调试后重试。"],
+        "当前工作区没有活动的 EmberProbe 调试会话。",
+        ["使用 {{debugStart}} 启动调试后重试。"],
         true
     ],
     DEBUG_SESSION_CONFLICT: [
         "resource_conflict",
-        "当前工作区匹配到多个调试会话（EmberProbe 内置调试器或 Cortex-Debug）。",
+        "当前工作区匹配到多个 EmberProbe 调试会话。",
         ["在 VS Code 中停止不需要的调试会话，保留唯一目标后重试。"],
         true
     ],
     DEBUG_ACTION_UNSUPPORTED: [
         "debug_capability",
         "当前调试会话不支持请求的操作或未声明对应 DAP 能力。",
-        [
-            "查看 debug.status 的 capabilities；若会话是 Cortex-Debug，可考虑升级 Cortex-Debug 或改用 mcu-debug-control --start 启动内置 emberprobe 会话。"
-        ],
+        ["查看 debug.status 的 capabilities，确认当前会话的 DAP 能力后再选择操作。"],
         false
     ],
     DEBUG_STATE_INVALID: [
         "debug_state",
         "请求的调试操作与当前运行/暂停状态不匹配。",
-        ["先使用 --status 读取实际状态再选择控制命令。"],
+        ["先使用 {{debugStatus}} 读取实际状态再选择控制命令。"],
         true
+    ],
+    INVALID_DEBUG_START: [
+        "debug_configuration",
+        "调试启动参数无效：attach 必须是布尔值。",
+        ["启动时省略 attach 进行复位调试，或传 true 以不复位方式附加。"],
+        false
     ],
     INVALID_DEBUG_THREAD: [
         "debug_configuration",
         "调试线程 ID 必须是正整数。",
-        ["省略 --thread 让 EmberProbe 使用当前停止线程，或提供有效 ID。"],
+        ["省略 {{thread}} 让 EmberProbe 使用当前停止线程，或提供有效 ID。"],
         false
     ],
     DEBUG_MEMORY_READ_UNSUPPORTED: [
         "debug_capability",
         "当前调试会话未声明 DAP readMemory 能力。",
-        ["确认当前调试后端支持内存读取；若会话是 Cortex-Debug，可考虑升级 Cortex-Debug。"],
+        ["确认当前调试会话支持内存读取后重试。"],
         false
     ],
     DEBUG_MEMORY_WRITE_UNSUPPORTED: [
         "debug_capability",
         "当前调试会话未声明 DAP writeMemory 能力。",
-        ["确认当前调试后端支持内存写入；若会话是 Cortex-Debug，可考虑升级 Cortex-Debug。"],
+        ["确认当前调试会话支持内存写入后重试。"],
         false
     ],
     DEBUG_CONTROL_TIMEOUT: [
         "debug_state",
         "调试适配器未在限时内返回期望的运行/暂停事件。",
         [
-            "先运行 --status 确认实际状态，不要自动重复发送原命令。",
-            "如果目标仍在运行，且 --pause 或 --restart 也返回 DEBUG_CONTROL_TIMEOUT，由用户明确执行 --stop，再执行 --start 重建会话。"
+            "先运行 {{debugStatus}} 确认实际状态，不要自动重复发送原命令。",
+            "如果目标仍在运行，且 {{pause}} 或 {{restart}} 也返回 DEBUG_CONTROL_TIMEOUT，由用户明确执行 {{stop}}，再执行 {{start}} 重建会话。"
         ],
         true
     ],
     DEBUG_CONTROL_BUSY: [
         "debug_state",
         "上一个调试控制操作尚未被 DAP 事件确认完成。",
-        ["先运行 --status 确认状态，再决定是否发送新操作；不要并发或自动重试。"],
+        ["先运行 {{debugStatus}} 确认状态，再决定是否发送新操作；不要并发或自动重试。"],
         true
     ],
     DEBUG_INSPECTION_STALE: [
@@ -411,6 +557,30 @@ const DIAGNOSTICS = {
         "暂停上下文已变化，旧帧或变量句柄不可复用。",
         ["读取当前状态，并在暂停后重新列出线程、调用栈和作用域。"],
         false
+    ],
+    DEBUG_EXPRESSION_REJECTED: [
+        "debug_configuration",
+        "表达式不是无副作用的变量路径：含赋值、自增/自减或函数调用。",
+        ["改用变量或成员路径，如 sensor.pos.y、buf[3]、*ptr；修改变量请走写入确认流程。"],
+        false
+    ],
+    MEMORY_REGION_NOT_ALLOWED: [
+        "peripheral_safety",
+        "原始内存读取只允许 Code 与 SRAM 区（0x00000000–0x3FFFFFFF）；外设、外部设备与系统区的读取可能有副作用。",
+        ["读取外设寄存器使用 {{peripheralRead}}，它按 SVD 拒绝读有副作用的寄存器。"],
+        false
+    ],
+    CHIP_NOT_READ: [
+        "target_connection",
+        "目标控制需要先读取一次芯片信息，以确定探针与目标连接。",
+        ["先使用 {{chipRead}} 读取芯片信息，再重试。"],
+        true
+    ],
+    CHIP_INFO_STALE: [
+        "target_connection",
+        "上次读取芯片信息后，探针或目标配置已变化。",
+        ["重新使用 {{chipRead}} 读取芯片信息，确认目标后再重试。"],
+        true
     ],
     DEBUG_INSPECTION_INVALID: [
         "debug_configuration",
@@ -451,21 +621,47 @@ const DIAGNOSTICS = {
     BREAKPOINT_SOURCE_NOT_FOUND: [
         "debug_configuration",
         "指定的断点源文件不存在。",
-        ["检查 --source 路径与工作区。"],
+        ["检查 {{source}} 路径与工作区。"],
+        false
+    ],
+    DATA_BREAKPOINT_SESSION_UNSUPPORTED: [
+        "debug_configuration",
+        "数据断点只能用于 EmberProbe 内置调试器会话。",
+        ["使用 {{debugStart}} 启动内置调试器；不要改用外部 GDB 服务器。"],
+        false
+    ],
+    DATA_BREAKPOINT_UNSUPPORTED: [
+        "debug_value",
+        "该变量不能设置数据断点：只支持 ELF 中的全局标量或叶子路径。",
+        ["用 {{list}} 选择 1、2 或 4 字节的标量成员；结构体、位域和运行时显示路径不受支持。"],
+        false
+    ],
+    DATA_BREAKPOINT_UNAVAILABLE: [
+        "debug_value",
+        "无法解析该变量的固定存储地址，或其宽度/对齐不适合硬件观察点。",
+        ["根据 message 选择 1、2 或 4 字节且地址对齐的变量。"],
+        false
+    ],
+    DATA_BREAKPOINT_FAILED: [
+        "debug_resources",
+        "调试器未能设置或更新数据断点，常见原因是硬件观察点比较器已用完。",
+        ["先用 {{breakpoints}} 查看现有数据断点，按用户意见移除不需要的后再试。"],
         false
     ],
     BREAKPOINT_NOT_FOUND: [
         "debug_configuration",
         "没有找到要删除或切换的断点。",
-        ["先使用 --breakpoints 列出当前断点。"],
+        ["先使用 {{breakpoints}} 列出当前断点。"],
         false
     ]
 };
 
-// Bridge 方法按副作用分类：只读方法在传输超时后可在相同前置条件下最多重试一次；
-// 其余方法(状态变更)超时后结果未知，必须查询实际状态、不得自动重发。未知方法按状态变更安全处理。
+// Bridge methods by side effect: read-only methods may be retried once after a transport timeout if their preconditions
+// still hold. Any other (state-changing) method has an unknown result after a timeout: query the actual state and never
+// resend automatically. Unknown methods are treated as state-changing.
 const READ_ONLY_METHODS = new Set([
     "cubemx.inspect",
+    "cubemx.query",
     "config.get",
     "probe.list",
     "elf.analyze",
@@ -474,12 +670,38 @@ const READ_ONLY_METHODS = new Set([
     "rtos.status",
     "rtos.snapshot",
     "debug.breakpoints.list",
-    "peripherals.list"
+    "peripherals.list",
+    "debug.evaluate",
+    "memory.read",
+    "variables.list",
+    "watch.list"
+]);
+
+// Observation methods do not change the target, workspace or extension state, but may touch hardware or install a USB
+// driver the first time, so they are not in the retryable read-only set. MCP tools derive readOnlyHint from these two
+// sets.
+const OBSERVATION_METHODS = new Set([
+    ...READ_ONLY_METHODS,
+    "cubemx.detect",
+    "cubemx.status",
+    "chip.read",
+    "fault.read",
+    "variables.read",
+    "variables.sample",
+    "peripherals.read",
+    "sampling.status",
+    "rtt.status",
+    "rtt.read",
+    "rtt.input.permission",
+    "flash.permission",
+    "variables.write.permission",
+    "cubemx.permission"
 ]);
 
 // These calls may perform a one-time USB driver installation before reading hardware.
 const DRIVER_SETUP_METHODS = new Set([
     "chip.read",
+    "target.control",
     "fault.read",
     "peripherals.read",
     "variables.read",
@@ -487,14 +709,18 @@ const DRIVER_SETUP_METHODS = new Set([
     "variables.write",
     "variables.exportCsv",
     "sampling.start",
+    "rtt.start",
     "debug.start",
     "flash.execute",
     "flash.program",
     "flash.verify"
 ]);
 
-// 状态变更超时后用于核对实际结果的查询方法；未列出的方法给出通用查询提示。
+// Queries that confirm the real outcome after a state-changing call times out; unlisted methods get a generic hint.
 const STATUS_QUERY_FOR = {
+    "rtt.start": "rtt.status",
+    "rtt.stop": "rtt.status",
+    "rtt.write": "rtt.read",
     "chip.read": "probe.list",
     "fault.read": "probe.list",
     "peripherals.read": "probe.list",
@@ -503,8 +729,12 @@ const STATUS_QUERY_FOR = {
     "variables.exportCsv": "probe.list",
     "cubemx.execute": "cubemx.inspect",
     "config.set": "config.get",
+    "probe.select": "probe.list",
     "debug.start": "debug.status",
     "debug.control": "debug.status",
+    "target.control": "chip.read",
+    "watch.add": "watch.list",
+    "watch.remove": "watch.list",
     "debug.breakpoints.update": "debug.breakpoints.list",
     "peripherals.write": "peripherals.read",
     "variables.write": "variables.read"
@@ -514,9 +744,59 @@ function isReadOnlyMethod(method) {
     return READ_ONLY_METHODS.has(method);
 }
 
-// RTOS 快照与暂停对象检查只由原生 emberprobe 调试器提供。
+// RTOS snapshots and paused-object inspection are only provided by the native emberprobe debugger.
 function requiresNativeSession(operation) {
     return typeof operation === "string" && (operation.startsWith("rtos.") || operation === "debug.inspect");
+}
+
+// Channel-specific fragments of suggested actions are written as {{token}}: skill scripts render them as the existing
+// CLI syntax (output unchanged), and the MCP server renders tool and parameter names. methods become machine-readable
+// actions independent of the channel.
+const RENDERINGS = {
+    config: { skill: "mcu-config Skill", mcp: "config_get 与 config_set 工具", methods: ["config.get", "config.set"] },
+    configSvd: { skill: "mcu-config", mcp: "config_set（values.svd）", methods: ["config.set"] },
+    list: { skill: "--list", mcp: "variables_list（query）", methods: ["variables.list"] },
+    chipRead: { skill: "mcu-chip-info", mcp: "chip_read", methods: ["chip.read"] },
+    peripheralRead: { skill: "mcu-peripheral-debug --read", mcp: "peripherals_read", methods: ["peripherals.read"] },
+    peripheralList: { skill: "--list 或 --query", mcp: "peripherals_list（query）", methods: ["peripherals.list"] },
+    debugStart: { skill: "mcu-debug-control --start", mcp: "debug_start", methods: ["debug.start"] },
+    debugPause: {
+        skill: "mcu-debug-control --pause",
+        mcp: "debug_control（action: pause）",
+        methods: ["debug.control"]
+    },
+    debugStatus: { skill: "--status", mcp: "debug_status", methods: ["debug.status"] },
+    pause: { skill: "--pause", mcp: "debug_control（action: pause）", methods: ["debug.control"] },
+    restart: { skill: "--restart", mcp: "debug_control（action: restart）", methods: ["debug.control"] },
+    stop: { skill: "--stop", mcp: "debug_control（action: stop）", methods: ["debug.control"] },
+    start: { skill: "--start", mcp: "debug_start", methods: ["debug.start"] },
+    thread: { skill: "--thread", mcp: "threadId", methods: [] },
+    source: { skill: "--source", mcp: "file 参数", methods: [] },
+    breakpoints: { skill: "--breakpoints", mcp: "debug_breakpoints_list", methods: ["debug.breakpoints.list"] },
+    last: { skill: "--last", mcp: "lastSeconds", methods: [] },
+    panel: { skill: "--panel", mcp: "panelId", methods: [] },
+    csvVariables: { skill: "--variables", mcp: "variables", methods: [] }
+};
+
+// render.channel is "skill" (default) or "mcp"; render.method maps a Bridge method name to that channel's syntax.
+function renderSuggestions(texts, render = {}) {
+    const channel = render.channel === "mcp" ? "mcp" : "skill";
+    const methodLabel = render.method || ((method) => method);
+    const methods = new Set();
+    const suggestedActions = texts.map((text) =>
+        String(text).replace(/\{\{([a-zA-Z]+)(?::([^}]*))?\}\}/g, (match, key, value) => {
+            if (key === "method") {
+                if (value) methods.add(value);
+                if (value) return methodLabel(value);
+                return channel === "mcp" ? "对应的状态查询工具" : "对应查询方法";
+            }
+            const rendering = RENDERINGS[key];
+            if (!rendering) return match;
+            for (const method of rendering.methods) methods.add(method);
+            return rendering[channel];
+        })
+    );
+    return { suggestedActions, actions: Array.from(methods, (method) => ({ method })) };
 }
 
 function diagnosticForError(error, context = {}) {
@@ -526,19 +806,21 @@ function diagnosticForError(error, context = {}) {
     const details = { ...(error?.details || {}) };
     let retryable = error?.retryable ?? preset[3] ?? false;
     let suggestedActions = error?.suggestedActions || preset[2] || ["保留本诊断并检查 EmberProbe/OpenOCD 日志。"];
-    // RTOS 快照/暂停对象检查只能使用原生 emberprobe 会话，建议动作需指明启动方式。
+    // RTOS snapshots and paused-object inspection need a native emberprobe session; suggested actions must say how to
+    // start one.
     if (requiresNativeSession(context.operation || details.method)) {
         if (code === "DEBUG_SESSION_NOT_ACTIVE" && !error?.suggestedActions)
             suggestedActions = [
-                "RTOS 快照与暂停对象检查需要原生 emberprobe 调试会话：使用 mcu-debug-control --start 启动后重试。"
+                "RTOS 快照与暂停对象检查需要原生 emberprobe 调试会话：使用 {{debugStart}} 启动后重试。"
             ];
         else if (code === "DEBUG_SESSION_CONFLICT" && !error?.suggestedActions)
             suggestedActions = ["在 VS Code 中停止多余的调试会话，保留唯一的原生 emberprobe 会话后重试。"];
         else if (code === "TARGET_NOT_PAUSED" && !error?.suggestedActions)
-            suggestedActions = ["使用 mcu-debug-control --pause 暂停原生 emberprobe 会话后重试。"];
+            suggestedActions = ["使用 {{debugPause}} 暂停原生 emberprobe 会话后重试。"];
     }
-    // 传输超时缺少服务端结果：只读方法可在前置不变时重试一次；状态变更方法结果未知，
-    // 必须查询实际状态、不得自动重发，也不声称请求已取消。
+    // A transport timeout has no server result: read-only methods may be retried once if preconditions are unchanged;
+    // state-changing methods have an unknown result, so query the actual state, never resend automatically, and never
+    // claim the request was cancelled.
     if (code === "BRIDGE_TIMEOUT") {
         const method = details.method || context.operation || "";
         const readOnly = isReadOnlyMethod(method);
@@ -552,10 +834,11 @@ function diagnosticForError(error, context = {}) {
                   ]
                 : [
                       "超时只说明未在预算内收到响应；这是状态变更请求，成败未知，需核对实际状态后再判断。",
-                      `先用 ${STATUS_QUERY_FOR[method] || "对应查询方法"} 核对实际状态，再决定下一步；不要自动重发该请求。`,
+                      `先用 {{method:${STATUS_QUERY_FOR[method] || ""}}} 核对实际状态，再决定下一步；不要自动重发该请求。`,
                       "确认未生效且前置条件允许后，才可重新发起。"
                   ];
     }
+    const rendered = renderSuggestions(suggestedActions, context.render);
     return {
         ok: false,
         type: "diagnostic",
@@ -568,14 +851,16 @@ function diagnosticForError(error, context = {}) {
             likelyCause:
                 error?.likelyCause || preset[1] || "当前错误未能自动归类，请结合 message 与 details 继续判断。",
             retryable,
-            suggestedActions,
+            suggestedActions: rendered.suggestedActions,
+            actions: rendered.actions,
             details
         }
     };
 }
 
-// 批量变量读取的部分失败：扩展在结果中返回 variableErrors[{ requestedName, error }]，
-// 其余变量照常返回。按错误码补全 likelyCause/suggestedActions，形状与整体诊断的 error 字段一致。
+// Partial failure of a batch variable read: the extension returns variableErrors[{ requestedName, error }] and the
+// remaining variables as usual. likelyCause/suggestedActions are filled in by error code, in the same shape as the
+// error field of a whole-call diagnostic.
 function variableErrorDiagnostics(result, context = {}) {
     const entries = Array.isArray(result?.variableErrors) ? result.variableErrors : [];
     return entries.map((entry) => ({
@@ -588,14 +873,18 @@ function writeDiagnostic(error, context) {
     process.stderr.write(JSON.stringify(diagnosticForError(error, context)) + "\n");
 }
 
-function call(workspace, method, params, timeoutMs) {
-    const info = descriptor(workspace);
+// Request headers only locate and audit callers and are not authentication; values are URI-encoded to carry non-ASCII
+// paths.
+function channelHeaders(channel) {
+    const headers = { "X-EmberProbe-Channel": channel.name };
+    if (channel.skillRoot) headers["X-EmberProbe-Skill-Root"] = encodeURIComponent(channel.skillRoot);
+    if (channel.client) headers["X-EmberProbe-Client"] = encodeURIComponent(channel.client);
+    return headers;
+}
+
+function send(located, channel, method, params, budget) {
+    const info = located.descriptor;
     const body = Buffer.from(JSON.stringify({ method, params: params || {} }));
-    // 实际(钳制后)超时预算与起始时间随超时错误一并上报，供 agent 判断耗时与恢复动作。
-    const budget = Math.max(
-        1000,
-        Math.min(2147483647, Number(timeoutMs) || (DRIVER_SETUP_METHODS.has(method) ? 360000 : 20000))
-    );
     const startedAt = Date.now();
     return new Promise((resolve, reject) => {
         const request = http.request(
@@ -607,7 +896,8 @@ function call(workspace, method, params, timeoutMs) {
                 headers: {
                     Authorization: `Bearer ${info.token}`,
                     "Content-Type": "application/json",
-                    "Content-Length": body.length
+                    "Content-Length": body.length,
+                    ...channelHeaders(channel)
                 },
                 timeout: budget
             },
@@ -636,27 +926,78 @@ function call(workspace, method, params, timeoutMs) {
                 })
             )
         );
-        request.on("error", async (error) => {
-            // 连接层失败(ECONNREFUSED/ECONNRESET 等)保留原始传输错误码与方法上下文，
-            // 由 diagnosticForError 映射为 BRIDGE_UNAVAILABLE，与请求超时区分描述。
+        request.on("error", (error) => {
+            // Connection failures (ECONNREFUSED, ECONNRESET, ...) keep the original transport error code and method
+            // context; diagnosticForError maps them to BRIDGE_UNAVAILABLE, described separately from request timeouts.
             const err = /** @type {NodeJS.ErrnoException & { details?: Record<string, unknown> }} */ (error);
             if (err && typeof err === "object" && !err.details)
                 err.details = { method, transportError: err.code || "transport" };
-            if (err.code === "BRIDGE_TIMEOUT" && DRIVER_SETUP_METHODS.has(method)) {
-                try {
-                    const inventory = await call(workspace, "probe.list", {}, 20000);
-                    err.details = { ...err.details, driverInventory: inventory };
-                } catch (queryError) {
-                    err.details = {
-                        ...err.details,
-                        driverStatusQueryError: String(queryError?.code || queryError?.message || queryError)
-                    };
-                }
-            }
             reject(err);
         });
         request.end(body);
     });
 }
 
-module.exports = { call, descriptor, diagnosticForError, variableErrorDiagnostics, writeDiagnostic, isReadOnlyMethod };
+// Timeout errors report the effective (clamped) timeout budget and start time so agents can judge elapsed time and
+// recovery.
+function requestBudget(method, timeoutMs) {
+    return Math.max(
+        1000,
+        Math.min(2147483647, Number(timeoutMs) || (DRIVER_SETUP_METHODS.has(method) ? 360000 : 20000))
+    );
+}
+
+// Makes one Bridge call through the locator; channel describes the caller (skill script or MCP server). If a registry
+// entry refuses the connection (its window is closing) the request never arrived, so retrying the next matching
+// instance is safe.
+async function callVia(channel, workspace, method, params, timeoutMs) {
+    const budget = requestBudget(method, timeoutMs);
+    const exclude = new Set();
+    for (;;) {
+        const located = locate(workspace, { exclude, instance: channel.instance });
+        try {
+            const result = await send(located, channel, method, params, budget);
+            if (located.secondaryRoot && result && typeof result === "object" && !Array.isArray(result))
+                return { ...result, bridge: { workspace: located.primaryWorkspace, notice: "BRIDGE_SECONDARY_ROOT" } };
+            return result;
+        } catch (error) {
+            if (error?.code === "ECONNREFUSED" && located.source === "registry" && !exclude.has(located.instanceId)) {
+                exclude.add(located.instanceId);
+                continue;
+            }
+            if (error?.code === "BRIDGE_TIMEOUT" && DRIVER_SETUP_METHODS.has(method)) {
+                try {
+                    const inventory = await callVia(channel, workspace, "probe.list", {}, 20000);
+                    error.details = { ...error.details, driverInventory: inventory };
+                } catch (queryError) {
+                    error.details = {
+                        ...error.details,
+                        driverStatusQueryError: String(queryError?.code || queryError?.message || queryError)
+                    };
+                }
+            }
+            throw error;
+        }
+    }
+}
+
+function call(workspace, method, params, timeoutMs) {
+    return callVia({ name: "skill", skillRoot: SKILL_ROOT }, workspace, method, params, timeoutMs);
+}
+
+module.exports = {
+    call,
+    callVia,
+    descriptor,
+    diagnosticForError,
+    variableErrorDiagnostics,
+    writeDiagnostic,
+    isReadOnlyMethod,
+    READ_ONLY_METHODS,
+    OBSERVATION_METHODS,
+    DRIVER_SETUP_METHODS,
+    STATUS_QUERY_FOR,
+    DIAGNOSTICS,
+    RENDERINGS,
+    renderSuggestions
+};

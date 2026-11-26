@@ -43,3 +43,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/project.ps1 -Act
 ```
 
 `compile_commands.json` 本身按照标准会包含当前电脑上的绝对路径，因此它必须由每台电脑本地生成，不能提交到 Git。项目的 `build` 目录已被 `.gitignore` 忽略。
+
+## 摩擦测定台架构建
+
+从工程根目录运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/project.ps1 -Action build -BenchDebug
+```
+
+普通构建生成 `build/basic_framework.hex`，台架构建生成 `build/bench-debug/basic_framework.hex`。EP 使用相应目录中同一次构建的 `basic_framework.elf`。若直接使用 CMake，以独立构建目录配置 `-DWHEELLEG_DEBUG_MODE=ON`。清理台架目录可用 `-Action clean -BenchDebug`。常规 `-Action clean` 清理整个 `build` 树。
+
+台架操作、协议和 EP 字段见 [摩擦测定台架固件](application/debug_mode/README.md)。关节与车轮复测和样本复算见 [摩擦测定与复测手册](.Doc/摩擦测定手册.md)。

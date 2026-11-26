@@ -1,0 +1,15 @@
+{
+  "requestId": "replace-with-a-fresh-id",
+  "baseRevision": 0,
+  "actor": "agent",
+  "summary": "补充 LQR 描述，保留画布位置",
+  "operations": [
+    {
+      "op": "node.update",
+      "id": "lqr",
+      "changes": {
+        "description": "u = -K(x-x_ref)；四路原始反馈力矩。该说明由 agent 手工维护。"
+      }
+    }
+  ]
+}

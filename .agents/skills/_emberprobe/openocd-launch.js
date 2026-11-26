@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const { normalizeProbeSerial, normalizeAdapterSpeed, probeFamily } = require("./probe-connection");
+const { leavesDirectory } = require("./file-identity");
 
 function normalizeTransport(value = "auto") {
     if (!["auto", "swd", "jtag", "hla_swd", "hla_jtag"].includes(value)) {
@@ -125,6 +126,8 @@ function buildOpenOcdConfigArgs(launch, transport = "auto", connection = {}) {
         launch.scriptsRoot,
         "-f",
         launch.probePath,
+        // Set by the probe preflight only for a CMSIS-DAP that the interface script leaves on its automatic backend.
+        ...(connection.adapterBackend === "hid" ? ["-c", "cmsis-dap backend hid"] : []),
         ...(serial ? ["-c", `adapter serial ${serial.includes(" ") ? JSON.stringify(serial) : serial}`] : []),
         ...(transport === "auto" ? [] : ["-c", `transport select ${transport}`]),
         "-f",
@@ -168,14 +171,18 @@ function isSafeCfgPath(value) {
     return parts.length > 0 && parts.every((part) => part && part !== "." && part !== "..");
 }
 
+function normalizeDriveLetter(filePath) {
+    return process.platform === "win32" ? String(filePath || "").replace(/^[a-z]:/, (d) => d.toUpperCase()) : filePath;
+}
+
 function resolveExecutablePath(executable) {
     const configured = String(executable || "").trim();
     if (!configured) return "";
     assertNativeExecutable(configured);
     if (configured.includes("/") || configured.includes("\\")) {
-        const absolute = path.resolve(configured);
+        const absolute = normalizeDriveLetter(path.resolve(configured));
         try {
-            const canonical = fs.realpathSync(absolute);
+            const canonical = normalizeDriveLetter(fs.realpathSync(absolute));
             assertNativeExecutable(canonical);
             return canonical;
         } catch (error) {
@@ -204,7 +211,7 @@ function resolveExecutablePath(executable) {
                 fs.accessSync(candidate, fs.constants.X_OK);
                 if (!fs.statSync(candidate).isFile()) continue;
                 assertNativeExecutable(candidate);
-                const canonical = fs.realpathSync(candidate);
+                const canonical = normalizeDriveLetter(fs.realpathSync(candidate));
                 assertNativeExecutable(canonical);
                 return canonical;
             } catch (error) {
@@ -216,12 +223,20 @@ function resolveExecutablePath(executable) {
     return configured;
 }
 
+function matchesOpenOcdExecutable(requested, configured, resolved) {
+    const setting = String(configured || "").trim();
+    return (
+        (String(requested || "").trim() === "openocd" && (!setting || setting === "openocd")) ||
+        resolveExecutablePath(requested) === normalizeDriveLetter(resolved)
+    );
+}
+
 function scriptsRootCandidates(executable) {
     const binary = resolveExecutablePath(executable);
     if (!binary || (!binary.includes("/") && !binary.includes("\\"))) return [];
     const prefix = path.dirname(path.dirname(binary));
     const candidates = [
-        process.env.OPENOCD_SCRIPTS,
+        isBundledOpenOcd(binary) ? undefined : process.env.OPENOCD_SCRIPTS,
         path.join(prefix, "scripts"),
         // xPack archives keep bin/ and openocd/scripts/ as siblings.
         path.join(prefix, "openocd", "scripts"),
@@ -229,6 +244,20 @@ function scriptsRootCandidates(executable) {
         path.join(prefix, "share", "openocd", "scripts")
     ].filter(Boolean);
     return [...new Set(candidates.map((candidate) => path.resolve(candidate)))];
+}
+
+function isBundledOpenOcd(binary) {
+    const prefix = path.dirname(path.dirname(binary));
+    // The packager adds this inventory to both EmberProbe platform archives.
+    return fs.existsSync(path.join(prefix, "distro-info", "emberprobe-targets.json"));
+}
+
+function openOcdEnvironment(binary) {
+    if (!isBundledOpenOcd(binary)) return undefined;
+    const env = { ...process.env };
+    // Windows environment variable lookup is case-insensitive.
+    for (const key of Object.keys(env)) if (key.toUpperCase() === "OPENOCD_SCRIPTS") delete env[key];
+    return env;
 }
 
 function resolveConfigFile(scriptsRoot, kind, config) {
@@ -249,14 +278,14 @@ function resolveConfigFile(scriptsRoot, kind, config) {
         });
     }
     const relative = path.relative(base, resolved);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    if (!relative || leavesDirectory(relative)) {
         throw Object.assign(new Error(`OpenOCD 配置脚本越界：${kind}/${config}`), { code: "OPENOCD_CONFIG_INVALID" });
     }
     return resolved;
 }
 
-// OpenOCD 会优先从 cwd 查找相对脚本。所有启动入口都应该使用这个解析结果，
-// 并以 scriptsRoot 作为 OpenOCD 的 cwd，防止工作区中的 target/ / interface/ / mem_helper.tcl 遮蔽官方脚本。
+// OpenOCD looks up relative scripts in cwd first. Every launch path should use this result and run OpenOCD with
+// scriptsRoot as cwd, so target/, interface/ or mem_helper.tcl in the workspace cannot shadow the official scripts.
 function resolveOpenOcdLaunch(executable, probe, target, transport = "auto") {
     normalizeTransport(transport);
     const resolvedExecutable = resolveExecutablePath(executable);
@@ -341,6 +370,8 @@ module.exports = {
     isSafeCfgPath,
     resolveExecutablePath,
     scriptsRootCandidates,
+    openOcdEnvironment,
+    matchesOpenOcdExecutable,
     findScriptsRoot,
     resolveConfigFile,
     resolveOpenOcdLaunch,

@@ -1,0 +1,15 @@
+services:
+  project-graph:
+    build: .
+    ports:
+      - "${GRAPH_PORT:-4317}:4317"
+    environment:
+      GRAPH_HOST: 0.0.0.0
+      GRAPH_PORT: 4317
+      GRAPH_DATA_DIR: /app/data/v2
+      GRAPH_ACCESS_TOKEN: ${GRAPH_ACCESS_TOKEN:?Set GRAPH_ACCESS_TOKEN in .env}
+    volumes:
+      - graph-data:/app/data
+    restart: unless-stopped
+volumes:
+  graph-data:

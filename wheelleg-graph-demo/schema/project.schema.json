@@ -1,0 +1,555 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://project-graph.example/schema/project-v2.json",
+  "title": "Project Graph v2",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "projectId",
+    "title",
+    "revision",
+    "sourceRoots",
+    "model",
+    "view",
+    "rootSceneId"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 2
+    },
+    "projectId": {
+      "$ref": "#/definitions/id"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "sourceRoots": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": [
+        "nodes",
+        "ports",
+        "edges",
+        "groups",
+        "scenes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "nodes": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/node"
+          }
+        },
+        "ports": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/port"
+          }
+        },
+        "edges": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/edge"
+          }
+        },
+        "groups": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/group"
+          }
+        },
+        "scenes": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/scene"
+          }
+        }
+      }
+    },
+    "view": {
+      "type": "object",
+      "required": [
+        "nodes",
+        "edges",
+        "groups",
+        "scenes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "nodes": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/nodeView"
+          }
+        },
+        "edges": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/edgeView"
+          }
+        },
+        "groups": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/groupView"
+          }
+        },
+        "scenes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "viewport"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "viewport": {
+                "type": "object",
+                "required": [
+                  "x",
+                  "y",
+                  "zoom"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "zoom": {
+                    "type": "number",
+                    "minimum": 0.1,
+                    "maximum": 4
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "rootSceneId": {
+      "$ref": "#/definitions/id"
+    }
+  },
+  "definitions": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,100}$"
+    },
+    "point": {
+      "type": "object",
+      "required": [
+        "x",
+        "y"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      }
+    },
+    "appearance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "background": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+        "header": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+        "border": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
+      }
+    },
+    "nodeView": {
+      "type": "object",
+      "required": [
+        "position"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "appearance": { "$ref": "#/definitions/appearance" },
+        "position": {
+          "$ref": "#/definitions/point"
+        },
+        "width": {
+          "type": "number",
+          "minimum": 180,
+          "maximum": 2000
+        },
+        "height": {
+          "type": "number",
+          "minimum": 80,
+          "maximum": 4000
+        }
+      }
+    },
+    "groupView": {
+      "type": "object",
+      "required": [
+        "position",
+        "width",
+        "height",
+        "collapsed"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "appearance": { "$ref": "#/definitions/appearance" },
+        "position": {
+          "$ref": "#/definitions/point"
+        },
+        "width": {
+          "type": "number",
+          "minimum": 240,
+          "maximum": 10000
+        },
+        "height": {
+          "type": "number",
+          "minimum": 120,
+          "maximum": 10000
+        },
+        "collapsed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "edgeView": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "style": {
+          "enum": [
+            "bezier",
+            "smoothstep",
+            "straight"
+          ]
+        },
+        "waypoints": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "$ref": "#/definitions/point"
+          }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "rootId",
+        "path"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "rootId": {
+          "$ref": "#/definitions/id"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "revision": {
+          "type": "string"
+        },
+        "endLine": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "dependencies": {
+        "endLine": [
+          "line"
+        ]
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": [
+        "id",
+        "label",
+        "kind",
+        "status",
+        "description",
+        "sourceRefs",
+        "metadata",
+        "sceneId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "kind": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "status": {
+          "enum": [
+            "implemented",
+            "design",
+            "unverified"
+          ]
+        },
+        "groupId": {
+          "$ref": "#/definitions/id"
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/source"
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "explanation": {
+              "type": "object",
+              "required": [
+                "receives",
+                "process",
+                "produces",
+                "decisions"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "receives": {
+                  "type": "string",
+                  "maxLength": 20000
+                },
+                "process": {
+                  "type": "string",
+                  "maxLength": 20000
+                },
+                "produces": {
+                  "type": "string",
+                  "maxLength": 20000
+                },
+                "decisions": {
+                  "type": "array",
+                  "maxItems": 50,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 10000
+                  }
+                }
+              }
+            },
+            "boardTone": {
+              "enum": [
+                "amber",
+                "teal",
+                "slate"
+              ]
+            }
+          }
+        },
+        "sceneId": {
+          "$ref": "#/definitions/id"
+        },
+        "detailSceneId": {
+          "$ref": "#/definitions/id"
+        }
+      }
+    },
+    "port": {
+      "type": "object",
+      "required": [
+        "id",
+        "nodeId",
+        "direction",
+        "label",
+        "dataType",
+        "unit",
+        "shape",
+        "coordinateFrame",
+        "order",
+        "description",
+        "multiplicity"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "nodeId": {
+          "$ref": "#/definitions/id"
+        },
+        "direction": {
+          "enum": [
+            "input",
+            "output"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "dataType": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "shape": {
+          "type": "string"
+        },
+        "coordinateFrame": {
+          "type": "string"
+        },
+        "order": {
+          "type": "integer"
+        },
+        "description": {
+          "type": "string"
+        },
+        "multiplicity": {
+          "enum": [
+            "one",
+            "many"
+          ]
+        },
+        "parentPortId": {
+          "$ref": "#/definitions/id"
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": [
+        "id",
+        "sourcePortId",
+        "targetPortId",
+        "label",
+        "kind",
+        "condition",
+        "description"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "sourcePortId": {
+          "$ref": "#/definitions/id"
+        },
+        "targetPortId": {
+          "$ref": "#/definitions/id"
+        },
+        "label": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "data",
+            "control",
+            "transition",
+            "force"
+          ]
+        },
+        "condition": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "group": {
+      "type": "object",
+      "required": [
+        "id",
+        "label",
+        "description",
+        "sceneId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "parentGroupId": {
+          "$ref": "#/definitions/id"
+        },
+        "sceneId": {
+          "$ref": "#/definitions/id"
+        }
+      }
+    },
+    "scene": {
+      "type": "object",
+      "required": [
+        "id",
+        "label",
+        "description"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "ownerNodeId": {
+          "$ref": "#/definitions/id"
+        }
+      }
+    }
+  }
+}

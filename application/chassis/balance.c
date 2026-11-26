@@ -11,21 +11,36 @@ static float wrap_angle(float a, float lo)
 }
 /* β 的物理范围：两根大腿夹角，0(并拢) ~ π(拉直)，窗口取 [-π/2, 3π/2) 两边各留 90° 余量 */
 #define BETA_WRAP_LO (-0.5f * PI)
+#define BETA_MIN_EXTENSION 1.0e-3f
+#define BETA_EXTENSION_WINDOW 0.35f
+#define LEG_LENGTH_MAX_OBSERVE 0.455f
+
+static float protect_full_extension(float beta)
+{
+    /* 满伸端越过零点会翻转五连杆解，膝间距为零还会导致除零。
+     * 窗口约对应 5 mm 满伸余量。保留正常折叠侧的张角供 S6 和登阶。 */
+    if (beta >= -BETA_EXTENSION_WINDOW && beta < BETA_MIN_EXTENSION)
+        return BETA_MIN_EXTENSION;
+    return beta;
+}
 
 
 void  r_Alpha_beta_calculate(float r_motor_big_leg,float r_motor_small_leg,float r_motor_big_speed,float r_motor_small_speed,r_leg_Resolve *r_leg)
 {
     /* 2026-10-28 新标定（标定结果.docx 横线下方）：
-     * α 零点 = "大腿居中"(=大腿竖直) 读数：左 3.49184 / 右 0.62886
+     * α 零点 = "大腿居中"(=大腿竖直) 读数：左 3.49184 / 右 0.61246（10-29 第三次仅右腿重标）
      * β 偏置 = "腿最长"(轮心位于髋正下方) 姿态：对称位形 β = -2α_firmware，
      *   左 α2=-0.53445 → β2=1.06890, Δ2=5.54055 → 偏置 6.60945
-     *   右 α2=-0.49286 → β2=0.98572, Δ2=0.58976 → 偏置 1.57548
+     *   右 α2=-0.50698 → β2=1.01396, Δ2=0.59091 → 偏置 1.60487（10-29 重标）
      * 旧 31.17°x2 装配常数属旧编码器零点，已并入偏置。
-     * 自检：左腿新偏置 6.60945 ≈ 旧 0.32781 + 2π(跨圈) = 6.61100，差 0.0016 rad。 */
-    r_leg->r_alpha = (r_motor_big_leg - 0.62886f);
-    r_leg->r_beta = -(r_motor_big_leg - r_motor_small_leg) + 1.57548f;
+     * 自检：左腿新偏置 6.60945 ≈ 旧 0.32781 + 2π(跨圈) = 6.61100，差 0.0016 rad。
+     * 右 β 三代对比：1.64771(第2代) / 1.57548(第3代) / 1.60487(本次)，本次居中。 */
+    /* 2026-11-22 落地后伸对称姿态，以左腿为基准反推右腿偏置。
+     * α 零点 0.61246 → 0.6563325，β 偏置 1.60487 → 1.5423093。 */
+    r_leg->r_alpha = r_motor_big_leg - 0.6563325f;
+    r_leg->r_beta = -(r_motor_big_leg - r_motor_small_leg) + 1.5423093f;
     r_leg->r_alpha = wrap_angle(r_leg->r_alpha, -PI);
-    r_leg->r_beta  = wrap_angle(r_leg->r_beta, BETA_WRAP_LO);
+    r_leg->r_beta  = protect_full_extension(wrap_angle(r_leg->r_beta, BETA_WRAP_LO));
     r_leg->r_dalpha = r_motor_big_speed;
     r_leg->r_dbeta =r_motor_big_speed - r_motor_small_speed;
 
@@ -101,6 +116,11 @@ void BalanceObserve(ten_balance_observation *ten_observe)
 
     ten_observe->l_leg_length = l_leg_theta_calculate(&l_leg, 1, 0);
     ten_observe->r_leg_length = r_leg_theta_calculate(&r_leg, 1, 0);
+    /* 只给满伸边界留余量，短腿观测仍用于折叠起立和登阶就绪判定。 */
+    if (ten_observe->l_leg_length > LEG_LENGTH_MAX_OBSERVE)
+        ten_observe->l_leg_length = LEG_LENGTH_MAX_OBSERVE;
+    if (ten_observe->r_leg_length > LEG_LENGTH_MAX_OBSERVE)
+        ten_observe->r_leg_length = LEG_LENGTH_MAX_OBSERVE;
 
    
 }
@@ -113,7 +133,7 @@ void  l_Alpha_beta_calculate(float l_motor_big_leg,float l_motor_small_leg,float
     l_leg->l_alpha = (l_motor_big_leg - 3.49184f);
     l_leg->l_beta = -(l_motor_big_leg - l_motor_small_leg) + 6.60945f;
     l_leg->l_alpha = wrap_angle(l_leg->l_alpha, -PI);
-    l_leg->l_beta  = wrap_angle(l_leg->l_beta, BETA_WRAP_LO);
+    l_leg->l_beta  = protect_full_extension(wrap_angle(l_leg->l_beta, BETA_WRAP_LO));
     l_leg->l_dalpha = l_motor_big_speed;
     l_leg->l_dbeta =l_motor_big_speed - l_motor_small_speed;
 
